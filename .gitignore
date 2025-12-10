@@ -1,0 +1,61 @@
+# Временные файлы Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+venv/
+env/
+.pytest_cache/
+*.egg-info/
+
+# Файлы сборки C++
+*.exe
+*.out
+*.app
+*.obj
+*.o
+*.dll
+*.lib
+*.a
+*.pdb
+*.idb
+*.ilk
+*.db
+*.opendb
+build/
+Debug/
+Release/
+x64/
+x86/
+CMakeFiles/
+
+# Конфиги IDE
+.vscode/
+.idea/
+*.suo
+*.sln
+*.vcxproj
+*.vcxproj.filters
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Логи и кэши
+*.log
+*.cache
+
+# Пользовательские данные и релизы
+releases/
+downloads/
+scripts/
+sounds/
+
+gamespaths.txt
+groups.txt
+linkspath.txt
+progpaths.txt
+scripts.txt
+settings.txt
+coords.txt
