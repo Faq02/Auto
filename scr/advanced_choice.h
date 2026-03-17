@@ -21,16 +21,3 @@ struct MenuOptions {
 
 
 std::vector<int> advansed_chooser(MenuOptions options);
-
-
-
-// Старая версия для обратной совместимости (опционально)
-//inline std::vector<int> advansed_chooser(std::vector<std::wstring> lines,
-//    bool singleChoice,
-//    std::wstring title = L"") {
-//    return advansed_chooser({
-//        .lines = lines,
-//        .singleChoice = singleChoice,
-//        .title = title
-//        });
-//}
