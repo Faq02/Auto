@@ -64,7 +64,7 @@ static std::pair<std::wstring, WinPathResult> win_path_manual()
     return { std::get<1>(result), WinPathResult::Path };
 }
 
-std::wstring group_add(std::wstring prog_view)
+std::wstring group_add(std::wstring prog_view, bool from_changer)
 {
     bool manual = false;
     std::wstring gr;
@@ -96,7 +96,6 @@ std::wstring group_add(std::wstring prog_view)
             if (!manual) { continue; }
             system("cls");
         }
-
         //
         // ≡≡≡ РЕЖИМ РУЧНОГО ВВОДА ≡≡≡
         //
@@ -157,9 +156,8 @@ std::wstring group_add(std::wstring prog_view)
 
                 if (!line.empty())
                     gr += line + L"|";
-
             }
-
+            if (from_changer) end = true;
             if (end) break;
             continue;
         }
@@ -173,7 +171,7 @@ std::wstring group_add(std::wstring prog_view)
             //std::wcout << get<std::wstring>(readFile("game", false));
             //gr += choose_line(std::stoi(chooser(L"Введите номер игры:\n")), "game") + L"|";
             gr += choose_line(advansed_chooser({ 
-                .lines_to_choose = get<std::vector<std::wstring>>(readFile("game", true)), 
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_type = "game", .isVector = true})),
                 .singleChoice = true, 
                 .title = L"Введите номер игры:\n" })[0], "game") + L"|";
             break;
@@ -182,7 +180,7 @@ std::wstring group_add(std::wstring prog_view)
             //std::wcout << get<std::wstring>(readFile("prog", false));
             //gr += choose_line(std::stoi(chooser(L"Введите номер программы:\n")), "prog") + L"|";
             gr += choose_line(advansed_chooser({
-                .lines_to_choose = get<std::vector<std::wstring>>(readFile("prog", true)),
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_type = "prog", .isVector = true})),
                 .singleChoice = true,
                 .title = L"Введите номер программы:\n" })[0], "prog") + L"|";
             break;
@@ -191,14 +189,14 @@ std::wstring group_add(std::wstring prog_view)
             //std::wcout << get<std::wstring>(readFile("link", false));
             //gr += choose_line(std::stoi(chooser(L"Введите номер ссылки:\n")), "link") + L"|";
             gr += choose_line(advansed_chooser({
-                .lines_to_choose = get<std::vector<std::wstring>>(readFile("link", true)),
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_type = "link", .isVector = true})),
                 .singleChoice = true,
                 .title = L"Введите номер ссылки:\n" })[0], "link") + L"|";
             break;
         }
     }
 
-    if (!gr.empty())
+    if (!gr.empty() and !from_changer)
     {
         std::wcout << L"Итоговая группа:\n" << gr << L"\n";
         writefile(gr, "group", "", true);
@@ -213,7 +211,7 @@ int group_del() {
     //std::wcout << get<std::wstring>(readFile("group", false));
     //std::wstring ch = chooser(L"Выбери группу:");
     int ch = advansed_chooser({ 
-        .lines_to_choose = get<std::vector<std::wstring>>(readFile("group", true)), 
+        .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_type = "group", .isVector = true})),
         .singleChoice = true, 
         .title = L"Выбери группу:\n" })[0];
     std::wstring line = choose_line(ch, "group");
@@ -235,7 +233,7 @@ int group_del() {
     //std::vector<int> choices_massive = massive_maker(L"Выбери номера для удаления");
      
     std::vector<int> choices_massive = advansed_chooser({ 
-        .lines_to_choose = get<std::vector<std::wstring>>(readFile("group", true)), 
+        .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_type = "group", .isVector = true})),
         .singleChoice = false, 
         .title = L"Выбери номера для удаления\n" });
     // 4. Формируем новую строку
@@ -250,7 +248,7 @@ int group_del() {
         retern_line.pop_back();
     }
     std::wcout << L"Новая группа:" << retern_line+L"|" << std::endl;
-    delete_lines_or_insert_one("group",{}, true, retern_line+L"|", ch,true);
+    delete_lines_or_insert_or_add_one("group",{}, true, retern_line+L"|", ch, true, false);
     return 0;
 }
 
