@@ -226,10 +226,14 @@ std::vector<int> advansed_chooser(MenuOptions options) {
         current_position += height;
     }
     bool from_scripts = options.lines_to_choose[0] == L"добавить Клик по координатам" && options.singleChoice;
-    bool from_groups_make = options.title.length() >= 6 &&
+    bool from_groups_make = (options.title.length() >= 6 &&
         options.title[0] == L'Р' && options.title[1] == L'е' &&
         options.title[2] == L'ж' && options.title[3] == L'и' &&
-        options.title[4] == L'м' && options.title[5] == L':';
+        options.title[4] == L'м' && options.title[5] == L':');
+    bool from_changer_and_del_lines = (options.lines_to_choose.back() == L"Закончить" && !options.singleChoice);
+    //ClearScreen();
+    //std::wcout << options.lines_to_choose.back(); Sleep(3000);
+    //std::wcout << from_changer_and_del_lines; Sleep(3000);
     // Скрытие курсора
     CONSOLE_CURSOR_INFO cursorInfo;
     GetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &cursorInfo);
@@ -335,6 +339,20 @@ std::vector<int> advansed_chooser(MenuOptions options) {
                     cursorX_pos++;
                     GoToXY(cursorX_pos, newLineCount - 2);
                     input_line += char_input;
+                    if (from_changer_and_del_lines && !input_line.empty()) {
+                        try {
+                            int input_num = std::stoi(input_line);
+                            if (input_num == options.lines_to_choose.size() ||
+                                input_num == options.lines_to_choose.size() - 1 ||
+                                input_num == options.lines_to_choose.size() - 2) {
+                                if (!input_line.empty()) {
+                                    selected.insert(std::stoi(input_line) - 1);
+                                }
+                                break; // Выход при вводе номера выхода
+                            }
+                        }
+                        catch (const std::exception&) { ; }
+                    }
                     DrawMenu(display_lines, selected, hover, !options.singleChoice, options.title, newLineCount, true, input_line);
                     continue;
                 }
@@ -360,6 +378,12 @@ std::vector<int> advansed_chooser(MenuOptions options) {
                         input_mode = false;
                         if (!input_line.empty()) {
                             selected.insert(std::stoi(input_line) - 1);
+                        }
+                        if (from_changer_and_del_lines &&
+                            (selected.find(options.lines_to_choose.size()) != selected.end() ||
+                                selected.find(options.lines_to_choose.size() - 1) != selected.end() ||
+                                selected.find(options.lines_to_choose.size() - 2) != selected.end())) {
+                            break;
                         }
                         DrawMenu(display_lines, selected, hover, !options.singleChoice, options.title, newLineCount, false);
                     }
@@ -401,6 +425,11 @@ std::vector<int> advansed_chooser(MenuOptions options) {
                             selected.erase(index);
                         else
                             selected.insert(index);
+                        if (from_changer_and_del_lines && (selected.find(options.lines_to_choose.size()) != selected.end() || // если конец
+                            selected.find(options.lines_to_choose.size() - 1) != selected.end() || //если возвращение к выбору объекта
+                            selected.find(options.lines_to_choose.size() - 2) != selected.end())) {//если возвращение к выбору режима
+                            break;
+                        }
                     }
                 }
 
@@ -458,6 +487,12 @@ std::vector<int> advansed_chooser(MenuOptions options) {
                 }
                 else {
                     PlaySelectSound();
+                    if (from_changer_and_del_lines &&
+                        (selected.find(options.lines_to_choose.size()) != selected.end() ||
+                            selected.find(options.lines_to_choose.size() - 1) != selected.end() ||
+                            selected.find(options.lines_to_choose.size() - 2) != selected.end())) {
+                        break;
+                    }
                     break;
                 }
             }
@@ -477,7 +512,7 @@ std::vector<int> advansed_chooser(MenuOptions options) {
                 ClearScreen();
                 cursorInfo.bVisible = TRUE;
                 SetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &cursorInfo);
-                return options.singleChoice ? std::vector<int>{ -1 } : std::vector<int>{};
+                return std::vector<int>{ -1 };
             }
         }
     }
@@ -505,3 +540,4 @@ std::vector<int> advansed_chooser(MenuOptions options) {
 //const int LeftMouseClick = FROM_LEFT_1ST_BUTTON_PRESSED;
 //const int EnterKey = VK_RETURN;
 //const int MyCustomReturn = VK_RETURN; // Еще один вариант имени
+
