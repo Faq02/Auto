@@ -4,26 +4,30 @@
 #include <string>
 #include <locale>
 #include <codecvt>
-#include "File_funcs.h"
+
 #include "Groups.h"
 #include <ShlObj.h>
 #include <comutil.h>
 #include <KnownFolders.h>
 #include "advanced_choice.h"
+#include "path_handler.h"
+#include "file_io.h"
+#include "data_work.h"
+#include "logger.h"
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "Shell32.lib")
 #pragma comment(lib, "comsuppw.lib")
 using std::wstring;
 using std::string;
 
-
+//...
 static wchar_t read_key()
 {
     std::wstring s;
     std::getline(std::wcin, s);
     return s.empty() ? L'\0' : s[0];
 }
-
+//это вообще что?
 static std::wstring read_line(const std::wstring& prompt)
 {
     std::wstring s;
@@ -32,21 +36,57 @@ static std::wstring read_line(const std::wstring& prompt)
     return s;
 }
 
+//принимает группу и возвращает с добавленой строкой-выбором
+std::wstring select_with_flags(std::wstring group, FileType type, std::wstring promt) {
+    int line_num = advansed_chooser({
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_path = FILE_NAMES.at(type), .isVector = true})),
+                .singleChoice = true,
+                .title = L"Введите номер " + promt + L":\n"})[0];
+
+    LineEntry entry = line_parser(type, line_num, L"");
+    int choice = advansed_chooser({
+        .lines_to_choose = {L"Заменить флаги", L"Оставить существующие"},
+        .singleChoice = true,
+        .title = L"Путь:" + entry.path + L"\n" + L"Имя:" + entry.name + L"\n" + L"Флаги:" + entry.flags + L"\n" })[0];
+    
+    std::wstring flags;
+    switch (choice) {
+    case 1:
+        flags = make_flags();
+        group += choose_line(line_num, type) + L"\"" + entry.name + L"\"" + flags + L"|";
+        break;
+    case 2:
+        group += choose_line(line_num, type) + L"\"" + entry.name + L"\"" + entry.flags + L"|";
+        break;
+    }
+    return group;
+}
+
+
+
+
+
+
+
+
+
+
 enum class WinPathResult
 {
     Path,      // обычный выбранный путь
     Link,      // пользователь выбрал "1 — ввести ссылку"
+    WithFlags,
     Switch,    // смена режима (` или ё)
     End,       // 0 — выйти
     Cancel     // пользователь закрыл диалог выбора
 };
-
+//старый говнокод
 static std::pair<std::wstring, WinPathResult> win_path_manual()
 {
     std::wcout << L"Режим: Ручное добавление (Win-path)\n";
-    std::wcout << L"( ` ) — сменить режим\n0 — закончить\n1 — ввести ссылку\n";
+    std::wcout << L"( ` ) — сменить режим\n0 — закончить\n1 — ввести ссылку\n2 - добавить с флагами(откроется выбор пути, затем выбор флагов)";
 
-    std::wstring key = read_line(L"Нажмите Enter для выбора пути...\n");
+    std::wstring key = read_line(L"Выберите и нажмите Enter... или нажмите просто Enter для выбора пути без флагов\n");
 
     if (key == L"0") return { L"", WinPathResult::End };
     if (key == L"`" || key == L"ё") return { L"", WinPathResult::Switch };
@@ -60,12 +100,17 @@ static std::pair<std::wstring, WinPathResult> win_path_manual()
         Sleep(200);
         return { L"", WinPathResult::Cancel };
     }
-
+    if (key == L"2") return { std::get<1>(result), WinPathResult::WithFlags };
     return { std::get<1>(result), WinPathResult::Path };
 }
-
+//скрипты?
+enum class SELECT_FROM_LIST {
+    Games = 1, GamesWithFlags = 2, Programs = 3, ProgramsWithFlags = 4, Links = 5
+};
+//старый говнокод
 std::wstring group_add(std::wstring prog_view, bool from_changer)
 {
+    log(L"group_add called\n");
     bool manual = false;
     std::wstring gr;
     std::wstring c;
@@ -74,23 +119,16 @@ std::wstring group_add(std::wstring prog_view, bool from_changer)
     bool end = false;
     while (true)
     {
+        //if (from_changer == true) end = true; 
         system("cls");
         c = std::to_wstring(advansed_chooser({ 
-            .lines_to_choose = { L"игры", L"программы",  L"ссылки", L"или 0—закончить" }, 
+            .lines_to_choose = { L"игра", L"игра с флагами", L"программа", L"программа с флагами",  L"ссылка", L"или 0—закончить"},
             .singleChoice = true, 
             .title = (manual ? L"Режим: Ручное добавление\n( ` ) — сменить режим\n" : L"Режим: Выбор из имеющихся\n( ` ) — сменить режим\n") })[0]);
-        /*std::wcout << (manual ? L"Режим: Ручное добавление\n"
-            : L"Режим: Выбор из имеющихся\n");
 
-        std::wcout << L"( ` ) — сменить режим\n";
-        std::wcout << L"0 — закончить\n";*/
+        if (c == L"0" || c == L"6") break;
 
-        /*if (!manual)
-            std::wcout << L"1-игры  2-программы  3-ссылки\n";*/
-
-        if (c == L"0" || c == L"4") break;
-
-        if (c == L"5")
+        if (c == L"7")
         {
             manual = !manual;
             if (!manual) { continue; }
@@ -101,6 +139,7 @@ std::wstring group_add(std::wstring prog_view, bool from_changer)
         //
         if (manual)
         {
+            std::wstring flgs;
             while (true)
             {
                 // режим Win-path
@@ -137,8 +176,13 @@ std::wstring group_add(std::wstring prog_view, bool from_changer)
                     case WinPathResult::Path:
                         gr += value + L"|";
                         continue; // остаёмся в ручном режиме
-                    }
 
+                    case WinPathResult::WithFlags:
+                        flgs = make_flags();
+                        gr += value + L"\"\"" + flgs + L"|"; //пока пустое имя, так как выбор из неизвестно чего
+                        break;
+                    }
+                    if (from_changer == true and !gr.empty()) end = true;
                     if (end || !manual) break;
                     continue;
                 }
@@ -148,73 +192,89 @@ std::wstring group_add(std::wstring prog_view, bool from_changer)
                     L"Режим: Ручное добавление\n"
                     L"( ` ) — сменить режим\n"
                     L"0 — закончить\n"
+                    L"1 - добавить флаги после выбора\n"
                     L"Введите путь или ссылку:\n"
                 );
 
                 if (line == L"0") { end = true; break; }
                 if (line == L"`" || line == L"ё") { manual = false; break; }
-
-                if (!line.empty())
+                if (!line.empty() and line != L"1")
                     gr += line + L"|";
+                
+                
+                if (line == L"1") {
+                    line = read_line(L"LВведите путь или ссылку : \n");
+                    flgs = make_flags();
+                    gr += line + L"\"\"" + flgs + L"|"; //опять без имени, так как предпологается, что это чисто информация для показа потом в title во время выбора групп
+                }
+
             }
-            if (from_changer) end = true;
             if (end) break;
             continue;
         }
 
-        //
+        //bb
         // ≡≡≡ РЕЖИМ ВЫБОРА ИЗ СПИСКА ≡≡≡
-        //
+        //bb
+        int line_num;
+        int choice;
+        std::wstring flags;
+        LineEntry entry;
         switch (stoi(c))
         {
-        case 1:
-            //std::wcout << get<std::wstring>(readFile("game", false));
-            //gr += choose_line(std::stoi(chooser(L"Введите номер игры:\n")), "game") + L"|";
+        case (int)SELECT_FROM_LIST::Games:
             gr += choose_line(advansed_chooser({ 
-                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_type = "game", .isVector = true})),
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Game), .isVector = true})),
                 .singleChoice = true, 
-                .title = L"Введите номер игры:\n" })[0], "game") + L"|";
+                .title = L"Введите номер игры:\n" })[0], FileType::Game) + L"|";
             break;
 
-        case 2:
-            //std::wcout << get<std::wstring>(readFile("prog", false));
-            //gr += choose_line(std::stoi(chooser(L"Введите номер программы:\n")), "prog") + L"|";
-            gr += choose_line(advansed_chooser({
-                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_type = "prog", .isVector = true})),
-                .singleChoice = true,
-                .title = L"Введите номер программы:\n" })[0], "prog") + L"|";
+        case (int)SELECT_FROM_LIST::GamesWithFlags:
+            gr = select_with_flags(gr, FileType::Game, L"игры");
             break;
 
-        case 3:
-            //std::wcout << get<std::wstring>(readFile("link", false));
-            //gr += choose_line(std::stoi(chooser(L"Введите номер ссылки:\n")), "link") + L"|";
+        case (int)SELECT_FROM_LIST::Programs:
             gr += choose_line(advansed_chooser({
-                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_type = "link", .isVector = true})),
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Program), .isVector = true})),
                 .singleChoice = true,
-                .title = L"Введите номер ссылки:\n" })[0], "link") + L"|";
+                .title = L"Введите номер программы:\n" })[0], FileType::Program) + L"|";
             break;
+
+        case (int)SELECT_FROM_LIST::ProgramsWithFlags:
+            gr = select_with_flags(gr, FileType::Program, L"программы");
+            break;
+
+        case (int)SELECT_FROM_LIST::Links:
+            gr += choose_line(advansed_chooser({
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Link), .isVector = true})),
+                .singleChoice = true,
+                .title = L"Введите номер ссылки:\n" })[0], FileType::Link) + L"|";
+            break;
+
         }
+        if (!gr.empty() and from_changer == true) end = true;
+        if (end == true) break;
     }
 
     if (!gr.empty() and !from_changer)
     {
         std::wcout << L"Итоговая группа:\n" << gr << L"\n";
-        writefile(gr, "group", "", true);
+        writefile(gr, FILE_NAMES.at(FileType::Group), "", true);
     }
-
+    log(L"итоговая группа:" + gr);
     return gr;
 }
 
 
-
+//говнокод
 int group_del() {
     //std::wcout << get<std::wstring>(readFile("group", false));
-    //std::wstring ch = chooser(L"Выбери группу:");
+    //std::wstring ch = input_word(L"Выбери группу:");
     int ch = advansed_chooser({ 
-        .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_type = "group", .isVector = true})),
+        .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Group), .isVector = true})),
         .singleChoice = true, 
         .title = L"Выбери группу:\n" })[0];
-    std::wstring line = choose_line(ch, "group");
+    std::wstring line = choose_line(ch, FileType::Group);
     // 1. Разбиваем строку на элементы с сохранением-делаем массив по пробелу
     std::vector<std::wstring> elements;
     size_t start = 0;
@@ -233,7 +293,7 @@ int group_del() {
     //std::vector<int> choices_massive = massive_maker(L"Выбери номера для удаления");
      
     std::vector<int> choices_massive = advansed_chooser({ 
-        .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_type = "group", .isVector = true})),
+        .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Group), .isVector = true})),
         .singleChoice = false, 
         .title = L"Выбери номера для удаления\n" });
     // 4. Формируем новую строку
@@ -248,7 +308,7 @@ int group_del() {
         retern_line.pop_back();
     }
     std::wcout << L"Новая группа:" << retern_line+L"|" << std::endl;
-    delete_lines_or_insert_or_add_one("group",{}, true, retern_line+L"|", ch, true, false);
+    delete_lines_or_insert_or_add_one(FileType::Group,{}, true, retern_line+L"|", ch, true, false);
     return 0;
 }
 
@@ -330,3 +390,6 @@ std::wstring GetOrCreateAppFolder() {
 
     return app_folder;
 }
+
+
+//не с чем не боролся, умирал от лени

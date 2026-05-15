@@ -1,11 +1,5 @@
 ﻿// auto.cpp : Этот файл содержит функцию "main". Здесь начинается и заканчивается выполнение программы.
-//
-#include "File_funcs.h"
-#include "Groups.h"
-#include "StartFuncs.h"
-#include "advanced_choice.h"
-#include "settings.h"
-#include "Changer.h"
+//удачи это понять...
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -22,16 +16,30 @@
 #include <sstream>
 #include <filesystem>
 #include <stdexcept>
+#include "app_config.h"
+#include "Groups.h"
+#include "StartFuncs.h"
+#include "advanced_choice.h"
+#include "settings.h"
+#include "Changer.h"
+#include "file_io.h"
+#include "data_work.h"
+#include "Manager.h"
+#include "ui_interactions.h"
+#include "path_handler.h"
+#include "win_help.h"
+#include "logger.h"
+#include "converter.h"
 
 static constexpr auto EXIT_CODE = -1;
 using namespace std;
 using std::get;
-const map<short, pair<wstring, string>> FILE_TYPES = { //map это словарь в данном случае он объединяет широкие строки и нет
-    {1, {L"игру", "game"}},                            //и посути мы сделали FILE_TYPES словарь глобальным и вызываем его с авто выбором по значению...
-    {2, {L"программу", "prog"}},
-    {3, {L"ссылку", "link"}},
-    {4, {L"скрипт", "scripts"}},
-    {5, {L"группу", "group"}}                                                   /*
+const map<short, pair<wstring, FileType>> FILE_TYPES = { //map это словарь в данном случае он объединяет широкие строки и нет
+    {1, {L"игру", FileType::Game}},                            //и посути мы сделали FILE_TYPES словарь глобальным и вызываем его с авто выбором по значению...
+    {2, {L"программу", FileType::Program}},
+    {3, {L"ссылку", FileType::Link}},
+    {4, {L"скрипт", FileType::Script}},
+    {5, {L"группу", FileType::Group}}                                                   /*
                                                          {1, {L"игру", "game"}} где объявление игру-wstring, game-string
                                                           ↑    ↑       ↑
                                                           |    |       it->second.second → "game"
@@ -59,7 +67,7 @@ void EnableANSI() {
 static void create_group_shortcut() {
     //std::wcout << get<std::wstring>(readFile("group", false));
     int group_number = advansed_chooser({ 
-        .lines_to_choose = get<vector<wstring>>(readFile({.file_type = "group", .isVector = true})),
+        .lines_to_choose = get<vector<wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Group), .isVector = true})),
         .singleChoice = true, 
         .title = L"Выберите группу для создания ярлыка:\n" })[0];
     if (group_number == EXIT_CODE) return;
@@ -107,7 +115,11 @@ static void add_or_delete(int app_type, PythonRuntime& python, wstring prog_view
     //    std::wcout << std::get<std::wstring> (readFile(it->second.second, false));
     //}
     bool is_group_or_link = app_type == 3 or app_type == 5;
-    vector<wstring> lineees = showfile(it->second.second, CURRENT_SETTINGS.showlines_num);
+    bool is_group = app_type == 5;
+    vector<wstring> lineees; 
+    if (is_group) lineees = show_groups(CURRENT_SETTINGS.showlines_num);
+    else { lineees = showfile(it->second.second, CURRENT_SETTINGS.showlines_num); }
+
     wstring title;
     for (auto& line : lineees) {
         title += line + L"\n";
@@ -120,19 +132,23 @@ static void add_or_delete(int app_type, PythonRuntime& python, wstring prog_view
         .lines_to_choose = lines_to_ch,
         .singleChoice = true,
         .title = title })[0];
-
+    bool with_flag = false;
+    if (action == 2 and !is_group_or_link) {
+        with_flag = true; action = 4;
+    }
+    if (action > 2 and !is_group_or_link and with_flag == false) { action -= 1; }
     if (it != FILE_TYPES.end()) {
-        func_linker(action, it->second.second, prog_view, false, NULL, &python);
+        manager(action, it->second.second, prog_view, false, NULL, &python);
         if (action == 1) { countdown(0.5, L"Осталось до возвращения: ", 1); }
         if (action == 2) { countdown(3, L"Осталось до возвращения: ", 1); }
-        if (it->second.second == "scripts") { make_txt_for_scripts("scripts\\"); } //скрипты изначально-файлы, уже потом-запись в файл с путями
+        if (it->second.second == FileType::Script) { make_txt_for_scripts("scripts\\"); } //скрипты изначально-файлы, уже потом-запись в файл с путями
     }
     else { wcerr << L"Неверный тип контента!\n"; }
 }
 
 
 static void settings(wstring pr_view, PythonRuntime& python) {
-    //std::wstring category = chooser(L"Выбор категории:\n1-Игры, 2-Программы, 3-Ссылки, 4-скрипты \033[31m5-Группы\033[0m 6-ярлык 7-настройки работы");
+    //std::wstring category = input_word(L"Выбор категории:\n1-Игры, 2-Программы, 3-Ссылки, 4-скрипты \033[31m5-Группы\033[0m 6-ярлык 7-настройки работы");
     while (true) {
         int category = advansed_chooser({
             .lines_to_choose = { L"Игры", L"Программы", L"Ссылки", L"скрипты", L"\033[31mГруппы\033[0m", L"Создать ярлык", L"Настройки работы" },
@@ -144,24 +160,33 @@ static void settings(wstring pr_view, PythonRuntime& python) {
     
 }
 
+
 static void run_application(short app_type, PythonRuntime& python) {
     if (auto it = FILE_TYPES.find(app_type); it != FILE_TYPES.end()) { // 1 из фич с++ 17 - обявление переменной в if зачем? я хз, но тут объявляем переменную содерж. словарь в которому мы выбираем элементы
         bool is_group_or_link = app_type == 3 or app_type == 5;
+        bool is_group = app_type == 5;
+        bool is_link = app_type == 3;
+        bool is_script = app_type == 4;
         //std::wcout << to_wstring(app_type); system("pause");
         //std::wcout << is_group_or_link; system("pause");
-        
-        vector<wstring> names = showfile(it->second.second, CURRENT_SETTINGS.showlines_num);
-        
-        //vector<wstring> lines = get<std::vector<std::wstring>>(readFile({
-        //    .file_type = it->second.second,
-        //    .isVector = true,
-        //    .for_py_code = false, //"костыль" так как не хочу добавлять ещё флаг и код и показ имён никогда не встретится, поэтому если true, то это либо группа либо ссылка
-        //    })); //один раз прочитали можно запомнить размер массива!!!!!!!!!!!!!!!!!!!!!!!!
+        vector<wstring> names = {};
+        if (is_group) names = show_groups(CURRENT_SETTINGS.showlines_num);
+        else names = showfile(it->second.second, CURRENT_SETTINGS.showlines_num);
+
+
+        std::wstring additional_option = L"";
+        additional_option = L"Выбрать файл на компьютере";
+        if (is_group) { additional_option = L"Создать новую"; }
+        else if (is_link) { additional_option = L"Написать новую"; }
+        else if (is_script) additional_option = L"Создать новый";
+        int option = 1;
+
         auto orig_lines_count = names.size();
         names.push_back(L" ");
-        names.push_back(L"Выбрать файл на компьютере");
-        
-        
+        names.push_back(additional_option);
+        if (is_script) {
+            names.push_back(L"Посмотреть");
+        }
         
         while (true) {
             //second.second -- во втором(элементе-словаре) второй элемент
@@ -171,23 +196,16 @@ static void run_application(short app_type, PythonRuntime& python) {
                 .title = L"Выберите " + it->second.first + L"\n" })[0];
             if (line_number == orig_lines_count + 1) { continue; }//предпоследний выбор-пустой выбор
             if (line_number == orig_lines_count + 2) {
-                wstring custom_path = choose_file_on_pc(CURRENT_SETTINGS.path_view_num, app_type);
-                if (!custom_path.empty()) {
-                    //std::wcout << custom_path; Sleep(10000);
-                    short app_typE = is_valid_file_type(custom_path);
-                    //std::wcout << to_wstring(app_typE); Sleep(10000);
-                    if (it->first == 1 && app_typE == 2) { app_typE = 1; }
-                    if (auto iT = FILE_TYPES.find(app_typE); iT != FILE_TYPES.end()) { 
-                        writefile(custom_path, iT->second.second, "", false);
-                        startfiles(orig_lines_count + 1, iT->second.second, &python, "");
-                    }
-                    return;
-                }
-                countdown(1, L"Вы передумали или ошибка, возвращаемся...", 1);
+                additional_option_logic(it, option, orig_lines_count, python, app_type);
+                return;
+            }
+            if (line_number == orig_lines_count + 3 and is_script) {
+                option = 2;
+                additional_option_logic(it, option, orig_lines_count, python, app_type);
                 return;
             }
             if (line_number == EXIT_CODE) return;
-            startfiles(line_number, it->second.second, &python, "");
+            startfiles(it->second.second, line_number, &python, "", false);
             return;
         }
     }
@@ -203,17 +221,18 @@ int main(int argc, char* argv[]) {
     SetConsoleOutputCP(CP_UTF8);
     _setmode(_fileno(stdout), _O_U16TEXT);
     _setmode(_fileno(stdin), _O_U16TEXT);
+    start_new_log();
 
     if (!std::filesystem::exists("python_embed") ||
         !std::filesystem::exists("python_embed/python310.zip")) {
-        std::wcerr << L"ОШИБКА: Папка python_embed или python310.zip не найдены!\n";
-        std::wcerr << L"Разместите папку python_embed рядом с exe-файлом.\n";
+        log(L"ОШИБКА: Папка python_embed или python310.zip не найдены!\n");
+        //log(L"Разместите папку python_embed рядом с exe-файлом.\n");
         system("pause");
         return 1;
     }
 
     PythonRuntime python;
-    //Sleep(10000);
+    //Sleep(100000);
     //test
     //startfiles(NULL, "", &python, WstringTo_Utf8(get<std::wstring>(readFile("1test.txt", false, true))));
     try {
@@ -222,19 +241,29 @@ int main(int argc, char* argv[]) {
             std::string command = argv[1];
             if (command == "--run-group" && argc > 2) {
                 int group_number = std::stoi(argv[2]);
-                std::wcout << group_number << std::endl;
-                startfiles(group_number, "group", &python, "");
+                log(L"Запуск группы:" + to_wstring(group_number) + L" по ярлыку");
+                startfiles(FileType::Group, group_number, &python, "",false);
                 return 0;
             }
         }
         wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-        if (argc >= 4 && wcscmp(argv[1], L"--create-task") == 0) {
-            // Режим создания задачи: имя и путь переданы как аргументы
-            std::wstring name = argv[2];
-            std::wstring path = argv[3];
-            return makeTaskAdmin(name, path);
+        if (argc > 1 and argc != 4) {
+            if (wcscmp(argv[1], L"--Asadmin") == 0) {
+                log(L"Запуск чего-то от администратора\n");
+                std::vector<std::wstring> Asadmintmp = std::get<std::vector<wstring>>(readFile({ .file_path = getFileName(FileType::Asadmintmp),.isVector = true }));
+                int line_num = stoi(Asadmintmp[1]); // там ДОЛЖНО гарантироваться, что 1-значение-тип именно в контексте FileType, а не map из main, 2-номер линии
+                FileType type = FileType(stoi(Asadmintmp[0]));
+                log(L"номер линии:"+ Asadmintmp[1] +L"\nтип:"+ Asadmintmp[0]);
+                startfiles(type, line_num, &python, "",true);
+                if (remove((FILE_NAMES.at(FileType::Asadmintmp).c_str())) == 0) { ; }
+                else {log(L"Ошибка при удалении asadmintmp после запуска");}
+                return 0;
+            }
         }
-    
+        if (argc == 2 && wcscmp(argv[1], L"--create-task") == 0) {
+            // Режим создания задачи: имя и путь переданы как аргументы
+            return makeTaskAdmin();
+        }
     EnableANSI();
     files_checker(); //после потому-что подуразумивается, что это не 1-ый раз работы прогрммы
     make_txt_for_scripts("scripts\\"); // 1 перезапись файла с путями дальше в add_or_delete
@@ -293,6 +322,14 @@ int main(int argc, char* argv[]) {
     }
     return 0;
 }
+
+// Запуск программы: CTRL+F5 или меню "Отладка" > "Запуск без отладки"
+// Отладка программы: F5 или меню "Отладка" > "Запустить отладку"
+
+// Советы по началу работы 
+//   1. В окне обозревателя решений можно добавлять файлы и управлять ими.
+//   2. В окне Team Explorer можно подключиться к системе управления версиями.
+//   3. В окне "Выходные данные" можно просматривать выходные данные сборки и другие сообщения.
+//   4. В окне "Список ошибок" можно просматривать ошибки.
 //   5. Последовательно выберите пункты меню "Проект" > "Добавить новый элемент", чтобы создать файлы кода, или "Проект" > "Добавить существующий элемент", чтобы добавить в проект существующие файлы кода.
 //   6. Чтобы снова открыть этот проект позже, выберите пункты меню "Файл" > "Открыть" > "Проект" и выберите SLN-файл.
-

@@ -152,18 +152,43 @@ void fast_print(HANDLE hConsole, const std::wstring& text) {
     DWORD written;
     WriteConsoleW(hConsole, text.c_str(), (DWORD)text.length(), &written, NULL);
 }
-static std::vector<int> start_end_culc(int& max_console_lines, int display_lines_size, int& hover, int& currentY) {
-    int can_show = max_console_lines - currentY; //доступное кол-во строк после currentY - отрисования заголовка
-    if (can_show < 1) can_show = 1;
-    int start = 0;
-    if (display_lines_size > can_show) {
-        start = hover - can_show + 1;
-        if (start < 0) start = 0;
-        if (start > display_lines_size - can_show) start = display_lines_size - can_show;
+static std::vector<int> start_end_culc(int max_console_lines, const std::vector<int>& element_heights, int hover, int currentY) {
+    int available_rows = max_console_lines - currentY;
+    if (available_rows < 1) available_rows = 1;
+    
+    // Шагаем от hover вверх, считаем суммарную высоту
+    int start = hover;
+    int total_height = 0;
+    
+    // 1) Идём вверх, пока не упрёмся в начало или не заполним доступное место
+    for (int i = hover; i >= 0; --i) {
+        if (total_height + element_heights[i] <= available_rows) {
+            total_height += element_heights[i];
+            start = i;
+        } else {
+            break;
+        }
     }
-    int end = start + can_show;
-    if (end > display_lines_size) end = display_lines_size;
-    return { start,end };
+    
+    // 2) Идём вниз от hover+1, пока есть место
+    int end = hover;
+    for (int i = hover + 1; i < (int)element_heights.size(); ++i) {
+        if (total_height + element_heights[i] <= available_rows) {
+            total_height += element_heights[i];
+            end = i;
+        } else {
+            break;
+        }
+    }
+    
+    // 3) Если поместилось меньше одного элемента (хотя бы hover должен быть)
+    if (total_height == 0 && hover < (int)element_heights.size()) {
+        total_height = element_heights[hover];
+        start = hover;
+        end = hover;
+    }
+    
+    return {start, end + 1}; // +1 для совместимости с циклом for(i = start; i < end; ++i)
 }
 static void hide_cursor(CONSOLE_CURSOR_INFO cursorInfo, bool visible = false) {
     cursorInfo.bVisible = visible;
@@ -332,9 +357,18 @@ void DrawMenu(const std::vector<std::wstring>& display_lines,
     }
     
     // Рисуем ТОЛЬКО видимую часть
-    std::vector<int> culc = start_end_culc(max_console_lines, static_cast<int>(display_lines.size()), hover, currentY);
+    std::vector<int> element_heights;
+    for (const auto& line : display_lines) {
+        element_heights.push_back(get_line_height(line, console_width));
+    }
+
+    std::vector<int> culc = start_end_culc(max_console_lines,
+        element_heights,
+        hover,
+        currentY);
     for (int i = culc[0]; i < culc[1]; ++i) { //рисуем что поместится
         bool sel = selected.count(i);
+        int printed_lines = 0;
         std::wstring marker = L"";
 
         if (showCheckboxes) {

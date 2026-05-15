@@ -12,10 +12,16 @@
 #include <io.h>
 #include <shellapi.h>
 #include <sstream>
-#include "File_funcs.h"
+
 #include "advanced_choice.h"
 #include "resource.h"
 #include "StartFuncs.h"
+#include "app_config.h"
+#include "file_io.h"
+#include "converter.h"
+#include "ui_interactions.h"
+#include "path_handler.h"
+#include "settings.h"
 
 
 
@@ -58,7 +64,7 @@ public:
             return;
         }
         /*std::wcout << StringToWstring(template_utf8); Sleep(10000);*/
-        startfiles(NULL, "", &python, template_utf8);
+        startfiles(FileType::null,NULL, &python, template_utf8,false);
 
         Sleep(1000);
         read_coords();
@@ -103,10 +109,11 @@ public:
         code += L"pyautogui.press('" + key + L"')\n";  
     }
     void save(std::string prog_name) {
-        writefile(code, "script", prog_name, false);
+        std::string full_path = "scripts\\" + prog_name + ".py";
+        writefile(code, full_path, prog_name, false);
     }
     void standart_lines() {
-        code += L"import pyautogui\nimport time\nimport keyboard\n\n";
+        code += L"import pyautogui\nimport time\nimport keyboard\nimport os\n\n";
     }
     std::wstring end() {
         return code;
@@ -150,8 +157,63 @@ public:
             template_utf8.replace(codePos, 25, userCodeUtf8);
             std::wcout << L"User code inserted, size: " << code.size() << L" chars" << std::endl;
         }
-        startfiles(NULL, "", &python, template_utf8);
+        startfiles(FileType::null,NULL, &python, template_utf8,false);
         
+        
+    }
+
+    void choose_program_to_start() { //сразу TODO-добавть выбор способа старта
+        int choice = advansed_chooser({ .lines_to_choose = {L"Игры", L"Программы", L"Ссылки", L"Скрипты", L"Выбрать на пк или ввести путь"},
+            .singleChoice = true,
+            .title = L"Выберите что запускать:" })[0];
+        std::wstring path = L"";
+        std::vector<std::wstring> case_3_lines_to_choose = {};
+        int ch;
+        switch (choice) {
+            //дальше - код из групп с убранными вариантами с флагами
+        case 1:
+            path = choose_line(advansed_chooser({
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Game), .isVector = true})),
+                .singleChoice = true,
+                .title = L"Введите номер игры:\n" })[0], FileType::Game);
+            break;
+
+        case 2:
+            path = choose_line(advansed_chooser({
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Program), .isVector = true})),
+                .singleChoice = true,
+                .title = L"Введите номер программы:\n" })[0], FileType::Program);
+            break;
+
+        case 3:
+            case_3_lines_to_choose = get<std::vector<std::wstring>>(readFile({ .file_path = FILE_NAMES.at(FileType::Link), .isVector = true }));
+            case_3_lines_to_choose.push_back(L" ");
+            case_3_lines_to_choose.push_back(L"Написать самому");
+            ch = advansed_chooser({
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Link), .isVector = true})),
+                .singleChoice = true,
+                .title = L"Введите номер ссылки:\n" })[0];
+            if (ch == case_3_lines_to_choose.size()) path = input_line(L"Вводите:");
+            else { path = choose_line(ch, FileType::Link); }
+            break;
+
+        case 4:
+            path = choose_line(advansed_chooser({
+                .lines_to_choose = get<std::vector<std::wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Script), .isVector = true})),
+                .singleChoice = true,
+                .title = L"Введите номер ссылки:\n" })[0], FileType::Link);
+            break;
+        case 5:
+            path = choose_file_on_pc(CURRENT_SETTINGS.path_view_num, FileType::Program, 2);//здесь FileType::Program, 2 просто заглушки, т.к не хочу менять функцию
+            //при отмене кстати пишет пустую строку-плохо
+            break;
+        default:
+            return;
+        }
+        if (choice == 4 or choice == 3) { //ссылка или скрипт
+            code += L"os.system(r\'\"start " + path + L"\"\')\n";
+        }
+        else { code += L"os.system(r\'\"" + path + L"\"\')\n"; }
         
     }
 };
@@ -176,6 +238,7 @@ std::wstring python_script_make(std::string prog_name, bool from_changer = false
             L"добавить ввод с клавиатуры",
             L"нажать кнопку",
             L"ЗАДЕРЖКА",
+            L"Запуск чего-то(выполняется консолью)",
             L"проверка",
             from_changer ? L" " : L"или 0-сохранить(закончить)"},
             .singleChoice = true, 
@@ -212,15 +275,19 @@ std::wstring python_script_make(std::string prog_name, bool from_changer = false
                 build.press(lime);
                 break;
             case 7:
-                sec = std::stof(chooser(L"в секундах (например: 0.2)"));
+                sec = std::stof(input_word(L"в секундах (например: 0.2)"));
                 build.add_delay(sec);
                 break;
             case 8:
+                build.choose_program_to_start();
+                break;
+            case 9:
                 if (python != nullptr) {
                     build.check(*python);
                     break;
                 }
                 break;
+
             case 0:
                 if (from_changer) {
                     continue;
@@ -229,11 +296,12 @@ std::wstring python_script_make(std::string prog_name, bool from_changer = false
                 build.save(prog_name);
                 end = true;
                 break;
-            case 9:
+            case 10:
                 if (from_changer) {
                     continue;
                     break;
                 }
+                std::wcout << L"Сохраняем\n";
                 build.save(prog_name);
                 end = true;
                 break;

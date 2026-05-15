@@ -1,9 +1,11 @@
 #include "settings.h"
-#include "File_funcs.h"
+
 #include "advanced_choice.h"
 #include <locale>
 #include <fstream>
 #include <span>
+#include "data_work.h"
+#include "file_io.h"
 
 using std::wifstream;
 using std::wstring;
@@ -14,6 +16,7 @@ const int path_choose_view = 1;
 const int if_path_wrong = 2;
 const int showlines = 3;
 const int flags = 4;
+const int have_task_admin = 5; // 0-false(нету задачи с asadmin), 1-true
 const int flags_start_indx = 3;
 
 //вызывает функцию advansed_chooser c нужным текстом
@@ -37,7 +40,7 @@ static void change_bool(vector<wstring>& old_flags, int index) {
 static vector<wstring> flags_ch_menu(vector<wstring> settings) {
     vector<wstring> v_flags(settings.begin() + flags_start_indx, settings.end()); //массив флагов(пока -а) {1}
     //std::wcout v_flags[0];Sleep(10000);
-    //if выбор в chooser = индекс - 1 меняем значение на другое
+    //if выбор в input_word = индекс - 1 меняем значение на другое
     int index = 0;
     wstring ask_create_scr;
     vector<wstring> flags_options;
@@ -56,7 +59,8 @@ static vector<wstring> flags_ch_menu(vector<wstring> settings) {
 //настройки одного прохода... : зашёл -> изменил -> выкинуло на выбор того что настраивать
 std::wstring prog_settings(bool change = false, short num_to_read = NULL) //mode - изменяем ли или нет, num - при вызове из функции определяет строку для чтения
 {
-    std::vector<wstring> settings = std::get<std::vector<wstring>>(readFile({ .file_type = "sett",.isVector = true}));
+
+    std::vector<wstring> settings = std::get<std::vector<wstring>>(readFile({ .file_path = getFileName(FileType::Settings),.isVector = true}));
     if (change == true) // если изменяем настройки
     {
         //настройка настроек
@@ -71,8 +75,9 @@ std::wstring prog_settings(bool change = false, short num_to_read = NULL) //mode
             case flags: settings = flags_ch_menu(settings); no_sub = true; break;
             case EXIT_CODE: break;
         }
-        while (settings.size() < 3) {
-            settings.push_back(L"1");
+        while (settings.size() < 5) {
+            settings.push_back(L"1"); //перенести в file_cheker(), заполняет недостоющие элементы если есть
+            if (settings.size() == 5) { settings.pop_back(); settings.push_back(L"0"); }
         }
         if (no_sub == false) {
             settings[main_menu_ch - 1] = sub_menu_ch; //основное изменение-меняем выбранную настройку на значение выбора подкатегории
@@ -156,7 +161,7 @@ const std::map<std::wstring, std::wstring> SHOWLINES = {
 ProgSettings CURRENT_SETTINGS;
 
 void read_set() {
-    std::vector<std::wstring> sett = std::get<std::vector<std::wstring>>(readFile({ .file_type = "sett", .isVector = true }));
+    std::vector<std::wstring> sett = std::get<std::vector<std::wstring>>(readFile({ .file_path = getFileName(FileType::Settings), .isVector = true }));
     auto it = PATH_CHOOSE_VIEW.find(sett[0]);
     if (it != PATH_CHOOSE_VIEW.end()) {
         CURRENT_SETTINGS.path_choose_view = it->second;

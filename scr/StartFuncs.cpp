@@ -14,10 +14,15 @@
 #include <cwctype>
 #include <taskschd.h>
 #include <comdef.h>
-#include "File_funcs.h"
 #include "StartFuncs.h"
 #include "File_search.h"
 #include "settings.h"
+#include "file_io.h"
+#include "converter.h"
+#include "Manager.h"
+#include "data_work.h"
+#include "path_handler.h"
+#include "logger.h"
 
 namespace fs = std::filesystem;
 
@@ -178,11 +183,56 @@ bool has_py_extension(const std::wstring& path) {
     return ext == L".py" || ext == L"yp."; // На случай обратного порядка
 }
 
+//сортирует пути для запуска из групп
+static std::vector<LineEntry> sort_entries(
+    std::vector<LineEntry> entries)
+{
+    std::stable_partition(
+        entries.begin(),
+        entries.end(),
+        [](auto& e) {
+            return e.path.starts_with(L"http")
+                || e.path.starts_with(L"https");
+        });
+
+    std::stable_partition(
+        entries.begin(),
+        entries.end(),
+        [](auto& e) {
+            return e.path.ends_with(L".py")
+                || e.path.ends_with(L".bat")
+                || e.path.ends_with(L".ps1");
+        });
+
+    return entries;
+}
+
+std::wstring del_close_after(std::wstring flags) {
+    size_t clafter_ind = flags.find(L"CloseAfter");
+    if (clafter_ind != std::wstring::npos) { 
+        std::vector<std::wstring> flags_vec = split(flags,L':');
+        flags = L"";
+        bool was_closeafter_before = false;
+        for (int i = 0; i < flags_vec.size();++i) {
+            if (flags_vec[i] == L"CloseAfter") { was_closeafter_before = true; continue; }
+            if (i != 0 and was_closeafter_before == false) { was_closeafter_before = false; flags = flags + L":" + flags_vec[i]; continue; }
+            flags = flags + flags_vec[i];
+        }
+        return flags;
+    }
+    return flags; //включая двоеточее, разделяющее флаги
+}
 
 
-static HINSTANCE RunFile(std::wstring path, const std::string& file_type = "", int line_num = NULL, PythonRuntime* python = nullptr, std::string code_from_scr_make="") {
+static HINSTANCE RunFile(std::wstring path, FileType type, int line_num = NULL, PythonRuntime* python = nullptr, std::string code_from_scr_make="") {
     // Проверяем расширение файла
-    if (path.length() >= 4 || !code_from_scr_make.empty()) {
+    log(L"вход в RunFile\nпуть:" + path + 
+        L"\nтип:" + StringToWstring(FILE_NAMES.at(type))+ 
+        L"\nномер линии:" + std::to_wstring(line_num));
+    log(L"  python: " + std::wstring(python ? L"OK\n" : L"NULL\n"));
+    if (!code_from_scr_make.empty()) {log(L"  code: <present, size=" + std::to_wstring(code_from_scr_make.size()) + L">");}
+    
+    if (type == FileType::Script || !code_from_scr_make.empty()) {
         std::wstring extension;
         std::wstring start;
         if (!path.empty()) {
@@ -193,7 +243,7 @@ static HINSTANCE RunFile(std::wstring path, const std::string& file_type = "", i
             return ShellExecuteW(NULL, L"open", path.c_str(), NULL, NULL, SW_SHOWNORMAL);
         }
         if (python == nullptr) {
-            std::wcout << L"с питоном то проблемки...\n"; Sleep(50000);
+            //std::wcout << L"с питоном то проблемки...\n"; Sleep(50000);
             return (HINSTANCE)1;
         }
         /*if (!code_from_scr_make.empty()) {
@@ -217,17 +267,15 @@ static HINSTANCE RunFile(std::wstring path, const std::string& file_type = "", i
                 if (code_from_scr_make != "") {
                     std::wcout << L"Запускаем... \n";
                     python->execute_safe(code_from_scr_make);
-                    std::wcout << L"\033[32mСкрипт успешно запущен!\033[0m" << std::endl;
+                    log(L"\033[32mСкрипт успешно запущен!\033[0m'\n");
                     SetCurrentDirectoryW(old_dir);
                     return (HINSTANCE)1;
-                }
-                std::string spath = "1";
-                spath += WstringTo_Utf8(path);
-                std::wstring wcode = get<std::wstring>(readFile({ .file_type = spath,.for_py_code = true, .isVector = false, }));
+                }              
+                std::wstring wcode = get<std::wstring>(readFile({ .file_path = WstringTo_Utf8(path),.for_py_code = true, .isVector = false, }));
                 std::string code = WstringTo_Utf8(wcode);
                 std::wcout << L"Запускаем... " << path << std::endl;
                 python->execute_safe(code);
-                std::wcout << L"\033[32mСкрипт успешно запущен!\033[0m" << std::endl;
+                log(L"\033[32mСкрипт успешно запущен!\033[0m'\n");
                 SetCurrentDirectoryW(old_dir);
                 return (HINSTANCE)1;
             }
@@ -236,7 +284,7 @@ static HINSTANCE RunFile(std::wstring path, const std::string& file_type = "", i
     }
     
     //проверка существования+поиск если надо(по настройке(можно просто предложить переделать путь))
-    if (!fs::exists(path)) {
+    if (!fs::exists(path) and type != FileType::Link) {
         std::wstring mode = prog_settings(false, 2);
         std::wstring foundPath;
         std::wstring pr_view = prog_settings(false, 1);
@@ -245,7 +293,7 @@ static HINSTANCE RunFile(std::wstring path, const std::string& file_type = "", i
         }
         else if (mode == L"2") {//ПОИТОГУ ЭТО НЕ РАБОТАЕТ СО СКРИПТАМИ
             std::wcout << L"Такого файла нету, согласно настройкам выберите(или введите) сами: " << std::endl;
-            func_linker(1, file_type, pr_view, true, line_num, python);
+            manager(1, type, pr_view, true, line_num, python); //возвращаемся для добавления в нужный файл
             return (HINSTANCE)1;
         }
     }
@@ -269,9 +317,10 @@ static HINSTANCE RunFile(std::wstring path, const std::string& file_type = "", i
 
 
 
-static bool RunScheduledTask(const std::wstring& taskName) {
+static bool RunScheduledTask() {
     // Формируем команду: schtasks /run /tn "ИмяЗадачи"
-    // Обрати внимание на экранирование кавычек вокруг имени задачи.
+    
+    std::wstring taskName = L"Asadmin_auto";
     std::wstring command = L"schtasks /run /tn \"" + taskName + L"\"";
 
     STARTUPINFOW si = { sizeof(si) };
@@ -303,114 +352,197 @@ static bool RunScheduledTask(const std::wstring& taskName) {
         return false;
     }
 }
+//логика запуска с флагами
+static int start_with_flags(std::wstring path, int line_number, std::wstring& fl, FileType type,bool from_admin) {
+    //парсим флаги, в вектор
+    //пониая какой какой(они могут быть в любом порядке) запускаем в правильном порядке например: 1флаг-closeafter 2-asadmin естественно сначало должен выполниться asadmin иначе
+    //всё сломается
+    std::vector flags = split(fl, L':');
+    sort_flags(flags);
+    log(L"вошли в start_with_flags\n");
+    log(L"путь:" + path + L"\nline_num:"+std::to_wstring(line_number) + (from_admin ? L"\nкак админ" : L"\nне как админ"));
+    log(L"флаги:\n");
+    for (std::wstring i : flags) {
+        log(i+L"\n");
+    }
+    std::vector<std::wstring> asadminParams = {};
+    asadminParams.push_back(std::to_wstring((int)type));
+    asadminParams.push_back(std::to_wstring(line_number));
+    bool has_started_path = false;
+    for (std::wstring flag : flags) {
+        if (flag == Flags::Asadmin) {
+            from_admin ? log(L"from_admin\n") : log(L"not from_admin\n");
+            if (from_admin) { RunFile(path, type, line_number, nullptr, ""); has_started_path = true; continue; }
+            log(L"запуск с Asadmin\n");
+            if (remove((FILE_NAMES.at(FileType::Asadmintmp).c_str())) == 0) { ; }
+            else { log(L"Ошибка при удалении asadmintmp перед запуском"); } 
+            writefile(asadminParams, FILE_NAMES.at(FileType::Asadmintmp), "", false); //создаём и записываем новый
+            RunScheduledTask(); //запускаем задачу
+        }
+        if (flag == Flags::CloseAfter) {
+            log(L"запуск с CloseAfter\n");
+            if (has_started_path == false) { RunFile(path, type, line_number, nullptr, ""); std::exit(0); }
+            std::exit(0);
+        }
+    }
+    return 0;
+}
 
 
+static int groupStart(int group_num) {
+    std::wstring gr_line = choose_line(group_num, FileType::Group, true);
+    Group group = group_parser(gr_line);
+    std::vector<std::wstring> paths, flags = {};
+    bool indeed_closeAfter = false;
+    group.entries = sort_entries(group.entries);
+    for (const LineEntry& entry : group.entries) {
+        paths.push_back(entry.path);
+        if (indeed_closeAfter != true) {
+            if (entry.flags.find(L"CloseAfter") != std::wstring::npos) {
+                indeed_closeAfter = true;
+            }
+        }
+        flags.push_back(entry.flags);
+    }
+    std::wstring line_flags = L"";
+    if (std::filesystem::exists("Grouptmp.txt")) { remove("Grouptmp.txt"); }
+    else { std::wcerr << L"Ошибка при удалении Grouptmp.txt возможно его не существует"; }
+    for (int i = 0; i < paths.size(); ++i) {
+        //временно
+        line_flags = flags[i];
+        if (!flags[i].empty()) {
+            if (indeed_closeAfter == true) { line_flags = del_close_after(flags[i]); }//удаление close_after, если вообще был
+            writefile(paths[i] + L"\"" + L"\"" + line_flags, FILE_NAMES.at(FileType::Grouptmp), "", false);
+            continue;
+            //startfiles(FileType::Grouptmp);
+        }
+        writefile(paths[i], FILE_NAMES.at(FileType::Grouptmp), "", false);
+    }
+    return 0;
 
-int startfiles(int line_number = NULL, const std::string& file_type = "", PythonRuntime* python = nullptr, std::string codem = "") {
-    std::wcout << L"Начало запуска...\n";
-    if (codem != "") {
-        //std::wcout << codem; Sleep(5000);
-        RunFile(L"", "", NULL, python, codem);
+}
+
+int startfiles(FileType type, int line_number = NULL, PythonRuntime* python = nullptr, std::string codem = "", bool from_admin=false) {
+    
+    if (type == FileType::Grouptmp and line_number == 0) {
+        for (int i = 0; i < std::get<std::vector<std::wstring>>(readFile({ .file_path = getFileName(FileType::Grouptmp), .for_full_read = true, .isVector = true })).size();i++) {
+            log(L"запускаем "+ std::to_wstring(i+1) + L"линию из Grouptmp...\n");
+            startfiles(FileType::Grouptmp, i + 1,python,"",from_admin);
+            Sleep(1000);
+        }
         return 0;
     }
-    LineEntry line_entry = line_parser(line_number, file_type, L"");
+
+    log(L"Начало запуска...(вход в startfiles)\n");
+    //log(from_admin);
+    if (codem != "") {
+        //std::wcout << codem; Sleep(5000);
+        RunFile(L"", FileType::null, NULL, python, codem);
+        return 0;
+    }
+    LineEntry line_entry = line_parser(type, line_number, L"");
     std::wstring path = line_entry.path;
     std::wstring flags = line_entry.flags;
+    log(L"путь:" + path+L"\nфлаги:"+flags);
     if (path.empty()) {
         std::wcout << L"Путь не найден!\n";
         return 1;
     }
     std::wstring exe_name = extract_filename(line_entry.path);
-    if (!flags.empty()) {
-        if (flags.starts_with(L"Asadmin")) {
-            if (flags.ends_with(exe_name) and (line_entry.name).empty())
-                RunScheduledTask(exe_name);
-            else {
-                RunScheduledTask(line_entry.name);
-            }
-            return 0;
-        }
-    }
-
-    if (file_type == "group") {
-        size_t start = 0;
-        for (size_t i = 0; i <= path.length(); i++) {
-            if (i == path.length() || path[i] == L'|') {
-                std::wstring one_el = path.substr(start, i - start);
-                if (one_el.empty()) {
-                    start = i + 1;
-                    continue;
-                }
-
-                // Проверяем начало строки
-                if (one_el.length() >= 5 && one_el.substr(0, 5) != L"https") {
-                    one_el = where_are_you_go_lnk(one_el);
-                }
-
-                bool isRunning = false;
-                if (one_el.length() >= 3 && one_el.substr(one_el.length() - 3) == L".py") {
-                    if (python != nullptr) {
-                        RunFile(one_el);
-                        start = i + 1;
-                        continue;
-                    }
-                    else {
-                        std::wcerr << L"Ошибка: PythonRuntime недоступен для запуска скрипта\n";
-                        start = i + 1;
-                        continue;
-                    }
-                }
-                if (one_el.length() >= 4 && one_el.substr(one_el.length() - 4) == L".exe") {
-                    size_t lastSlash = one_el.find_last_of(L"\\/");
-                    std::wstring exeName = (lastSlash != std::wstring::npos) ?
-                        one_el.substr(lastSlash + 1) : one_el;
-                    isRunning = IsProcessRunning(exeName);
-                }
-
-                std::wcout << L"Запускаем... " << one_el << std::endl;
-
-                if (isRunning) {
-                    size_t lastSlash = one_el.find_last_of(L"\\/");
-                    std::wstring exeName = (lastSlash != std::wstring::npos) ?
-                        one_el.substr(lastSlash + 1) : one_el;
-                    std::wcout << L"\033[31mПриложение\033[0m " << exeName
-                        << L" \033[31mуже запущено\033[0m \nЗапуск отменён\n" << std::endl;
-                    start = i + 1;
-                    continue;
-                }
-                HINSTANCE result;
-                /*if (one_el.length() >= 3 && one_el.substr(one_el.length() - 3) == L".py" || isRunning) {
-                    ;
-                }*/
-               
-                result = RunFile(one_el,"",NULL,python,"");
-                if (reinterpret_cast<INT_PTR>(result) <= 32) {
-                    std::wcout << L"Файл не запущен, ошибка: \n"
-                        << shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))) << std::endl;
-                }
-                else {
-                    std::wcout << L"\033[32mФайл успешно запущен!\033[0m" << std::endl;
-                }
-                
-                start = i + 1;
-            }
-        }
+    if (!flags.empty() and type != FileType::Group) {
+        log(L"есть флаги:" + flags + L"\nидем запускать");
+        start_with_flags(path, line_number, flags, type,from_admin);
         return 0;
     }
 
-    /*if (file_type != "link" && GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    if (type == FileType::Group) {
+        //size_t start = 0;
+        //for (size_t i = 0; i <= path.length(); i++) {
+        //    if (i == path.length() || path[i] == L'|') {
+        //        std::wstring one_el = path.substr(start, i - start);
+        //        if (one_el.empty()) {
+        //            start = i + 1;
+        //            continue;
+        //        }
+
+        //        // Проверяем начало строки
+        //        if (one_el.length() >= 5 && one_el.substr(0, 5) != L"https") {
+        //            one_el = where_are_you_go_lnk(one_el);
+        //        }
+
+        //        bool isRunning = false;
+        //        if (one_el.length() >= 3 && one_el.substr(one_el.length() - 3) == L".py") {
+        //            if (python != nullptr) {
+        //                RunFile(one_el,FileType::null);
+        //                start = i + 1;
+        //                continue;
+        //            }
+        //            else {
+        //                log(L"Ошибка: PythonRuntime недоступен для запуска скрипта\n");
+        //                start = i + 1;
+        //                continue;
+        //            }
+        //        }
+        //        if (one_el.length() >= 4 && one_el.substr(one_el.length() - 4) == L".exe") {
+        //            size_t lastSlash = one_el.find_last_of(L"\\/");
+        //            std::wstring exeName = (lastSlash != std::wstring::npos) ?
+        //                one_el.substr(lastSlash + 1) : one_el;
+        //            isRunning = IsProcessRunning(exeName);
+        //        }
+
+        //        std::wcout << L"Запускаем... " << one_el << std::endl;
+
+        //        if (isRunning) {
+        //            size_t lastSlash = one_el.find_last_of(L"\\/");
+        //            std::wstring exeName = (lastSlash != std::wstring::npos) ?
+        //                one_el.substr(lastSlash + 1) : one_el;
+        //            std::wcout << L"\033[31mПриложение\033[0m " << exeName
+        //                << L" \033[31mуже запущено\033[0m \nЗапуск отменён\n" << std::endl;
+        //            log(L"\033[31mПриложение\033[0m " + exeName
+        //                + L" \033[31mуже запущено\033[0m \nЗапуск отменён\n");
+        //            start = i + 1;
+        //            continue;
+        //        }
+        //        HINSTANCE result;
+        //        /*if (one_el.length() >= 3 && one_el.substr(one_el.length() - 3) == L".py" || isRunning) {
+        //            ;
+        //        }*/
+        //       
+        //        result = RunFile(one_el, FileType::null,NULL,python,"");
+        //        if (reinterpret_cast<INT_PTR>(result) <= 32) {
+        //            log(L"Файл не запущен, ошибка: " + shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result)))+L"\n");
+        //        }
+        //        else {
+        //            std::wcout << L"\033[32mФайл успешно запущен!\033[0m" << std::endl;
+        //            log(L"\033[32mФайл успешно запущен!\033[0m\n");
+        //        }
+        //        
+        //        start = i + 1;
+        //    }
+        //}
+        //return 0;
+        groupStart(line_number);
+        startfiles(FileType::Grouptmp);
+        return 0;
+    }
+
+    /*if (file_name != "link" && GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
 
         std::wcout << L"Файл не найден!\n";
         return 1;
     }*/
-    HINSTANCE result = RunFile(path, file_type, line_number,python);
+    HINSTANCE result = RunFile(path, type, line_number,python);
     if (reinterpret_cast<INT_PTR>(result) == 1) { return 0; }
     if (reinterpret_cast<INT_PTR>(result) <= 32) {
         std::wcout << L"Файл не запущен, ошибка: "
+
             << shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))) << std::endl;
+        log(L"Файл не запущен, ошибка: " + shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))) + L"\n");
         return 1;
     }
 
     std::wcout << L"\033[32mФайл успешно запущен!\033[0m" << std::endl;
+    log(L"\033[32mФайл успешно запущен!\033[0m\n");
     return 0;
 }
+

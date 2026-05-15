@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include "app_config.h"
 class PythonRuntime {
 private:
     bool m_initialized;  // Флаг состояния
@@ -15,5 +16,5 @@ public:
     int execute(const std::string& code);
     bool execute_safe(const std::string& code);
 };
-int startfiles(int line_number, const std::string& file_type, PythonRuntime* python, std::string codem);
+int startfiles(FileType type, int line_number, PythonRuntime* python, std::string codem, bool from_admin);
 std::wstring where_are_you_go_lnk(const std::wstring& lnkPath);
