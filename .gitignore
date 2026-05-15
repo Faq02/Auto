@@ -51,7 +51,7 @@ releases/
 downloads/
 scripts/
 sounds/
-
+*.txt
 gamespaths.txt
 groups.txt
 linkspath.txt
