@@ -115,3 +115,8 @@ int additional_option_logic(std::map<short, std::pair<std::wstring, FileType>>::
     }
     return 0;
 }
+
+std::wstring colorfulPrint(std::wstring prompt, std::wstring text_color, std::wstring bacground_color) {
+    const std::wstring RESET = L"\033[0m";
+    return text_color + bacground_color + prompt + RESET;
+}
