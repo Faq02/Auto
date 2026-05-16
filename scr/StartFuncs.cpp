@@ -23,6 +23,7 @@
 #include "data_work.h"
 #include "path_handler.h"
 #include "logger.h"
+#include "ui_interactions.h"
 
 namespace fs = std::filesystem;
 
@@ -534,15 +535,20 @@ int startfiles(FileType type, int line_number = NULL, PythonRuntime* python = nu
     HINSTANCE result = RunFile(path, type, line_number,python);
     if (reinterpret_cast<INT_PTR>(result) == 1) { return 0; }
     if (reinterpret_cast<INT_PTR>(result) <= 32) {
-        std::wcout << L"Файл не запущен, ошибка: "
+        std::wcout << colorfulPrint(L"Файл не запущен, ошибка:", PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::RED)
 
             << shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))) << std::endl;
         log(L"Файл не запущен, ошибка: " + shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))) + L"\n");
         return 1;
     }
+    if (reinterpret_cast<INT_PTR>(result) == 33) {
+        log(L"Файл уже запущен.\n");
+        std::wcout << colorfulPrint(L"Файл уже запущен", PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::BLUE) << std::endl;
+        return 0;
+    }
 
-    std::wcout << L"\033[32mФайл успешно запущен!\033[0m" << std::endl;
-    log(L"\033[32mФайл успешно запущен!\033[0m\n");
+    std::wcout << colorfulPrint(L"Файл успешно запущен", PRINT_TEXTCOLOR::GREEN) << std::endl;
+    log(L"Файл успешно запущен!");
     return 0;
 }
 
