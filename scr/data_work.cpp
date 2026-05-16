@@ -158,6 +158,7 @@ LineEntry line_parser(FileType type, short line_number = NULL, wstring raw_line 
 std::vector<LineEntry> file_parser(FileType type) {
     std::string file_name = getFileName(type);
     auto lines = get<std::vector<std::wstring>>(readFile({ .file_path = file_name,.for_full_read = true, .for_py_code = false, .isVector = true, }));
+    if (lines.empty() || (lines.size() == 1 && lines[0].empty())) return {};
     std::vector<LineEntry> result;
 
     for (auto& l : lines)
@@ -195,7 +196,7 @@ Group group_parser(const std::wstring& line) {
 std::vector<wstring> showfile(FileType type, wstring setting)
 {
     std::vector<LineEntry> file_entry = file_parser(type);
-    std::vector<LineEntry> group_entry;
+    if (file_entry.empty()) return {};
     std::vector<wstring> result;
 
     bool gr_or_lnk = ((type == FileType::Link) || type == FileType::Group);
