@@ -1,6 +1,6 @@
 #pragma once
-#include <string>
 #include "app_config.h"
+
 class PythonRuntime {
 private:
     bool m_initialized;  // Флаг состояния

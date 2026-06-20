@@ -8,7 +8,8 @@ namespace fs = std::filesystem;
 
 //удаляет старый лог если есть 
 void start_new_log() {
-    if (std::filesystem::exists("app.log")) {remove("app.log");}
+    if (std::filesystem::exists("app.log")) {remove("app.log"); std::wofstream fout("app.log", std::ios::app);}
+
 }
 
 

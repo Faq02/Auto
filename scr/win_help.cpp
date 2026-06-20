@@ -1,12 +1,14 @@
-#include <string>
 #include <windows.h>
 #include <taskschd.h>
 #include <comdef.h>
 #include <ShlObj.h>
-#include <iostream>
-#include "win_help.h"
+#include <TlHelp32.h>
 #include <filesystem>
+
 #include "file_io.h"
+#include "win_help.h"
+#include "logger.h"
+
 
 
 #pragma comment(lib, "comsuppw.lib")
@@ -37,7 +39,7 @@ static void make_task_with_elevate() {
         // Здесь ВАЖНО просто выйти, а не пытаться снова.
         DWORD dwError = GetLastError();
         if (dwError == ERROR_CANCELLED) {
-            std::wcout << L"Пользователь отказался от повышения прав." << std::endl;
+            log(L"Пользователь отказался от повышения прав.\n");
         }
     }
     else {
@@ -54,7 +56,7 @@ int makeTaskAdmin() {
     if (AmIAdmin()) { ; }
     else { make_task_with_elevate(); return 0; }
     HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    if (FAILED(hr)) { std::wcerr << L"COM initialization failed.\n"; return 1; }
+    if (FAILED(hr)) { log(L"COM initialization failed.\n"); return 1; }
 
     // Настройки безопасности COM
     //hr = CoInitializeSecurity(
@@ -68,7 +70,7 @@ int makeTaskAdmin() {
     //    EOAC_NONE,                   // Дополнительные флаги
     //    NULL);
     if (FAILED(hr)) {
-        std::wcerr << L"CoInitializeSecurity failed. Error: 0x" << std::hex << hr << std::endl;
+        log(L"CoInitializeSecurity failed. Error: 0x" + hr);
         CoUninitialize();
         return 1;
     }
@@ -78,14 +80,17 @@ int makeTaskAdmin() {
     hr = CoCreateInstance(CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER,
         IID_ITaskService, (void**)&pService);
     if (FAILED(hr)) {
-        std::wcerr << L"Failed to create TaskScheduler object. Error: " << std::hex << hr << std::endl; CoUninitialize(); Sleep(100000);
+        log(L"Failed to create TaskScheduler object. Error: " + hr);
+        CoUninitialize();
         return 1;
     }
 
     // Подключаемся к планировщику
     hr = pService->Connect(_variant_t(), _variant_t(), _variant_t(), _variant_t());
     if (FAILED(hr)) {
-        std::wcerr << L"Failed to connect to Task Scheduler. Error: " << std::hex << hr << std::endl; pService->Release(); CoUninitialize(); Sleep(100000);
+        log(L"Failed to connect to Task Scheduler. Error: " + hr); 
+        pService->Release(); 
+        CoUninitialize();
         return 1;
     }
 
@@ -93,7 +98,9 @@ int makeTaskAdmin() {
     ITaskFolder* pRootFolder = NULL;
     hr = pService->GetFolder(_bstr_t(L"\\"), &pRootFolder);
     if (FAILED(hr)) {
-        std::wcerr << L"Cannot get root folder. Error: " << std::hex << hr << std::endl; pService->Release(); CoUninitialize(); Sleep(100000);
+        log(L"Cannot get root folder. Error: " + hr);
+        pService->Release();
+        CoUninitialize(); 
         return 1;
     }
 
@@ -101,7 +108,10 @@ int makeTaskAdmin() {
     ITaskDefinition* pTask = NULL;
     hr = pService->NewTask(0, &pTask);
     if (FAILED(hr)) {
-        std::wcerr << L"Failed to create task definition. Error: " << std::hex << hr << std::endl; pRootFolder->Release(); pService->Release(); CoUninitialize(); Sleep(100000);
+        log(L"Failed to create task definition. Error: " + hr);
+        pRootFolder->Release();
+        pService->Release();
+        CoUninitialize();
         return 1;
     }
 
@@ -126,7 +136,6 @@ int makeTaskAdmin() {
         pSettings->put_StopIfGoingOnBatteries(VARIANT_FALSE);    // Не останавливать на батареях
         pSettings->Release();
     }
-    std::wcout << L"6\n";
     size_t lastSlash = path.find_last_of(L"\\/");
     std::wstring workingDir;
     if (std::string::npos != lastSlash) {
@@ -168,17 +177,16 @@ int makeTaskAdmin() {
         TASK_LOGON_INTERACTIVE_TOKEN,      // Тип логина
         _variant_t(L""),                   // Настройки (не обязательны)
         &pRegisteredTask);
-    std::wcout << L"8\n";
     if (SUCCEEDED(hr)) {
-        std::wcout << L"Task successfully registered.\n"; pRegisteredTask->Release();
+        log(L"Task successfully registered.\n"); pRegisteredTask->Release();
         //pRegisteredTask->Run(_variant_t(), NULL);
     }
     else {
-        std::wcerr << L"Failed to register task. Error: " << std::hex << hr << std::endl; Sleep(100000);
+        log(L"Failed to register task. Error: " + hr);
         if (hr == 0x80070005) { // E_ACCESSDENIED
             //заместо просьбы просто запрашивать повышение прав 
 
-            std::wcerr << L"Access denied. Run this program as Administrator to create the task.\n";
+            log(L"Access denied. Run this program as Administrator to create the task.\n");
         }
     }
     pTask->Release();
@@ -187,4 +195,76 @@ int makeTaskAdmin() {
     CoUninitialize();
     delete_lines_or_insert_or_add_one(FileType::Settings, {}, true, L"1", 5, false, false);
     return 0;
+}
+
+
+//возвращает bool работает ли процесс и и его PID
+std::tuple<bool, DWORD> IsProcessRunning(const std::wstring& processName) {
+    PROCESSENTRY32W entry = { sizeof(PROCESSENTRY32W) };
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
+    DWORD pid = 0;
+    if (snapshot == INVALID_HANDLE_VALUE) return std::make_tuple(false, pid);
+
+    bool exists = false;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, processName.c_str()) == 0) {
+                exists = true;
+                pid = entry.th32ProcessID;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+    return std::make_tuple(exists, pid);
+}
+
+
+struct TargetProcess {
+    DWORD pid;
+    HWND hwnd;
+};
+
+
+
+
+
+static BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
+    TargetProcess* target = reinterpret_cast<TargetProcess*>(lParam);
+    DWORD windowPid;
+    GetWindowThreadProcessId(hwnd, &windowPid);
+
+    if (windowPid == target->pid && GetShellWindow() != hwnd) {
+        HWND owner = GetWindow(hwnd, GW_OWNER);
+        LONG style = GetWindowLong(hwnd, GWL_STYLE);
+        bool isMainWin = (style & WS_CAPTION) == WS_CAPTION;
+
+        // Теперь активируем ТОЛЬКО видимые главные окна
+        if (owner == NULL && isMainWin && IsWindowVisible(hwnd)) {
+            target->hwnd = hwnd;
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+
+bool ActivateProcessByPID(DWORD pid) {
+    TargetProcess target = { pid, NULL };
+    EnumWindows(EnumWindowsProc, reinterpret_cast<LPARAM>(&target));
+    if (target.hwnd != NULL) {
+        // Проверяем состояние окна
+        if (IsIconic(target.hwnd)) {
+            ShowWindow(target.hwnd, SW_RESTORE);  
+        }
+        else {
+            ShowWindow(target.hwnd, SW_SHOW);
+        }
+        SetForegroundWindow(target.hwnd);
+        return true;
+    }
+    else {
+        return false;
+    }
 }

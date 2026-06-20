@@ -14,6 +14,7 @@
 #include <cwctype>
 #include <taskschd.h>
 #include <comdef.h>
+
 #include "StartFuncs.h"
 #include "File_search.h"
 #include "settings.h"
@@ -24,6 +25,7 @@
 #include "path_handler.h"
 #include "logger.h"
 #include "ui_interactions.h"
+#include "win_help.h"
 
 namespace fs = std::filesystem;
 
@@ -72,26 +74,6 @@ static std::wstring shell_error_control(int cod_error) {
     case 33: return L"Приложение уже запущено";
     default: return L"Неизвестная ошибка: " + std::to_wstring(cod_error);
     }
-}
-
-static bool IsProcessRunning(const std::wstring& processName) {
-    PROCESSENTRY32W entry = { sizeof(PROCESSENTRY32W) };
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
-
-    if (snapshot == INVALID_HANDLE_VALUE) return false;
-
-    bool exists = false;
-    if (Process32FirstW(snapshot, &entry)) {
-        do {
-            if (_wcsicmp(entry.szExeFile, processName.c_str()) == 0) {
-                exists = true;
-                break;
-            }
-        } while (Process32NextW(snapshot, &entry));
-    }
-
-    CloseHandle(snapshot);
-    return exists;
 }
 
 
@@ -303,8 +285,12 @@ static HINSTANCE RunFile(std::wstring path, FileType type, int line_num = NULL, 
         size_t lastSlash = path.find_last_of(L"\\/");
         std::wstring exeName = (lastSlash != std::wstring::npos) ?
             path.substr(lastSlash + 1) : path;
-        if (IsProcessRunning(exeName)) {
-            return (HINSTANCE)33; // ALREADY_RUNNING
+        
+        auto [running, pid] = IsProcessRunning(exeName);
+        
+        if (running) {
+            if( ActivateProcessByPID(pid) == true) return(HINSTANCE)33;
+            else { ; }
         }
     }
 
@@ -457,71 +443,6 @@ int startfiles(FileType type, int line_number = NULL, PythonRuntime* python = nu
     }
 
     if (type == FileType::Group) {
-        //size_t start = 0;
-        //for (size_t i = 0; i <= path.length(); i++) {
-        //    if (i == path.length() || path[i] == L'|') {
-        //        std::wstring one_el = path.substr(start, i - start);
-        //        if (one_el.empty()) {
-        //            start = i + 1;
-        //            continue;
-        //        }
-
-        //        // Проверяем начало строки
-        //        if (one_el.length() >= 5 && one_el.substr(0, 5) != L"https") {
-        //            one_el = where_are_you_go_lnk(one_el);
-        //        }
-
-        //        bool isRunning = false;
-        //        if (one_el.length() >= 3 && one_el.substr(one_el.length() - 3) == L".py") {
-        //            if (python != nullptr) {
-        //                RunFile(one_el,FileType::null);
-        //                start = i + 1;
-        //                continue;
-        //            }
-        //            else {
-        //                log(L"Ошибка: PythonRuntime недоступен для запуска скрипта\n");
-        //                start = i + 1;
-        //                continue;
-        //            }
-        //        }
-        //        if (one_el.length() >= 4 && one_el.substr(one_el.length() - 4) == L".exe") {
-        //            size_t lastSlash = one_el.find_last_of(L"\\/");
-        //            std::wstring exeName = (lastSlash != std::wstring::npos) ?
-        //                one_el.substr(lastSlash + 1) : one_el;
-        //            isRunning = IsProcessRunning(exeName);
-        //        }
-
-        //        std::wcout << L"Запускаем... " << one_el << std::endl;
-
-        //        if (isRunning) {
-        //            size_t lastSlash = one_el.find_last_of(L"\\/");
-        //            std::wstring exeName = (lastSlash != std::wstring::npos) ?
-        //                one_el.substr(lastSlash + 1) : one_el;
-        //            std::wcout << L"\033[31mПриложение\033[0m " << exeName
-        //                << L" \033[31mуже запущено\033[0m \nЗапуск отменён\n" << std::endl;
-        //            log(L"\033[31mПриложение\033[0m " + exeName
-        //                + L" \033[31mуже запущено\033[0m \nЗапуск отменён\n");
-        //            start = i + 1;
-        //            continue;
-        //        }
-        //        HINSTANCE result;
-        //        /*if (one_el.length() >= 3 && one_el.substr(one_el.length() - 3) == L".py" || isRunning) {
-        //            ;
-        //        }*/
-        //       
-        //        result = RunFile(one_el, FileType::null,NULL,python,"");
-        //        if (reinterpret_cast<INT_PTR>(result) <= 32) {
-        //            log(L"Файл не запущен, ошибка: " + shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result)))+L"\n");
-        //        }
-        //        else {
-        //            std::wcout << L"\033[32mФайл успешно запущен!\033[0m" << std::endl;
-        //            log(L"\033[32mФайл успешно запущен!\033[0m\n");
-        //        }
-        //        
-        //        start = i + 1;
-        //    }
-        //}
-        //return 0;
         groupStart(line_number);
         startfiles(FileType::Grouptmp);
         return 0;
@@ -535,19 +456,17 @@ int startfiles(FileType type, int line_number = NULL, PythonRuntime* python = nu
     HINSTANCE result = RunFile(path, type, line_number,python);
     if (reinterpret_cast<INT_PTR>(result) == 1) { return 0; }
     if (reinterpret_cast<INT_PTR>(result) <= 32) {
-        std::wcout << colorfulPrint(L"Файл не запущен, ошибка:", PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::RED)
-
-            << shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))) << std::endl;
+        colorfulPrint(L"Файл не запущен, ошибка:"+ shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))), PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::RED);
         log(L"Файл не запущен, ошибка: " + shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))) + L"\n");
         return 1;
     }
     if (reinterpret_cast<INT_PTR>(result) == 33) {
         log(L"Файл уже запущен.\n");
-        std::wcout << colorfulPrint(L"Файл уже запущен", PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::BLUE) << std::endl;
+        colorfulPrint(L"Файл уже запущен", PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::BLUE);
         return 0;
     }
 
-    std::wcout << colorfulPrint(L"Файл успешно запущен", PRINT_TEXTCOLOR::GREEN) << std::endl;
+    colorfulPrint(L"Файл успешно запущен", PRINT_TEXTCOLOR::GREEN);
     log(L"Файл успешно запущен!");
     return 0;
 }

@@ -57,7 +57,35 @@ void countdown(double seconds_to_wait, std::wstring wstring_to_show, int duratio
     }
 }
 
-int additional_option_logic(std::map<short, std::pair<std::wstring, FileType>>::const_iterator it, int option, size_t orig_lines_count, PythonRuntime& python, short app_type) {
+
+int show_scripts(int state, std::vector<std::wstring> scr_insides_lines, bool need_translate, bool from_scr_start) {
+    
+    std::vector<std::wstring> lines_to_choose = { L"Вернуться",(need_translate == true ? L" Показать без перевода" : L"Показать перевод") };
+    if (from_scr_start) {
+        lines_to_choose.pop_back();
+        lines_to_choose.pop_back();
+        //оставляю внизу, чтобы было как раньше-смена перевода последняя опция
+        lines_to_choose.push_back(L"Запустить");
+        lines_to_choose.push_back(L"Сменить(вернуться)");
+        lines_to_choose.push_back((need_translate == true ? L" Показать без перевода" : L"Показать перевод"));
+    }
+    std::wstring scr_title = L"";
+    if (need_translate == true) scr_insides_lines = translate_script_insides(scr_insides_lines); //перевод на русский-пользовательский
+    for (auto& line : scr_insides_lines) {
+        scr_title += line + L"\n";
+    }
+    state = advansed_chooser({
+        .lines_to_choose = lines_to_choose,
+        .singleChoice = true,
+        .title = scr_title })[0];
+    return state;
+}
+
+
+
+
+int additional_option_logic(std::map<short, std::pair<std::wstring, FileType>>::const_iterator& it, int option, size_t orig_lines_count, PythonRuntime& python, short app_type) {
+    
     enum class OPTION {
         ADD = 1, SHOW_ONE_TRANSLATED = 2
     };
@@ -72,6 +100,8 @@ int additional_option_logic(std::map<short, std::pair<std::wstring, FileType>>::
     std::vector<std::wstring> scr_insides_lines = {};
     std::wstring scr_title = L"";
     int line_number = 0;
+
+
     switch (option) {
     case (int)OPTION::ADD:
         manager(1, it->second.second, CURRENT_SETTINGS.path_view_num,false,0,&python);
@@ -101,22 +131,69 @@ int additional_option_logic(std::map<short, std::pair<std::wstring, FileType>>::
                     scr_path = choose_line(line_number, it->second.second, true);
                     scr_name = WstringTo_Utf8(extract_filename(scr_path));
                 }
-                scr_insides_lines = std::get<std::vector<std::wstring>>(readFile({ .file_path = "scripts\\" + scr_name,.isVector = true })); //не переведённые
-                if (need_translate == true) scr_insides_lines = translate_script_insides(scr_insides_lines); //перевод на русский
-                for (auto& line : scr_insides_lines) {
-                    scr_title += line + L"\n";
-                }
-                state = advansed_chooser({
-                    .lines_to_choose = {L"Запустить", L"Сменить(вернуться)", (need_translate == true ? L" Показать без перевода" : L"Показать перевод")},
-                    .singleChoice = true,
-                    .title = scr_title })[0];
+                scr_insides_lines = std::get<std::vector<std::wstring>>(readFile({ .file_path = "scripts\\" + scr_name, .for_full_read = true, .isVector = true })); //не переведённые
+                state = show_scripts(state, scr_insides_lines, need_translate, true);
             }
         }
     }
     return 0;
 }
 
-std::wstring colorfulPrint(std::wstring prompt, std::wstring text_color, std::wstring bacground_color) {
-    const std::wstring RESET = L"\033[0m";
-    return text_color + bacground_color + prompt + RESET;
+void colorfulPrint(std::wstring_view prompt, std::wstring_view text_color, std::wstring_view background_color) {
+    constexpr std::wstring_view RESET = L"\033[0m";
+    std::wstring massage = std::format(L"{}{}{}{}\n", text_color, background_color, prompt, RESET);
+    WriteConsoleW(GetStdHandle(STD_OUTPUT_HANDLE), massage.c_str(), massage.size(), nullptr, NULL);
+}
+
+
+SelectedItem select_from_file_or_manual(FileType type, bool allow_manual, bool allow_flags, bool force_manual) {
+    SelectedItem result;
+    result.cancelled = false;
+
+    if (!force_manual) {
+        auto lines = get<std::vector<std::wstring>>(readFile({ .file_path = FILE_NAMES.at(type), .isVector = true }));
+        // Удаляем пустые строки (если есть)
+        lines.erase(std::remove_if(lines.begin(), lines.end(), [](const std::wstring& s) { return s.empty(); }), lines.end());
+
+        if (!lines.empty()) {
+            auto chosen = advansed_chooser({
+                .lines_to_choose = lines,
+                .singleChoice = true,
+                .title = L"Выберите номер:"
+                });
+            if (chosen.empty()) {
+                result.cancelled = true;
+                return result;
+            }
+            int line_num = chosen[0];
+            if (line_num >= 1 && line_num <= lines.size()) {
+                result.path = choose_line(line_num, type);
+            }
+            else {
+                result.cancelled = true;
+                return result;
+            }
+        }
+        else if (!allow_manual) {
+            // Список пуст, а ручной ввод не разрешён – отмена
+            result.cancelled = true;
+            return result;
+        }
+    }
+
+    // Если путь ещё не получен (список был пуст или force_manual), запускаем ручной ввод
+    if (result.path.empty() && allow_manual) {
+        // Здесь может быть выбор: ввести строку или выбрать файл на ПК
+        // Для простоты – только ввод строки
+        result.path = input_line(L"Введите путь или ссылку (0 – отмена):");
+        if (result.path == L"0") {
+            result.cancelled = true;
+            return result;
+        }
+    }
+
+    if (allow_flags && !result.cancelled) {
+        result.flags = make_flags(); // Ваша функция
+    }
+    return result;
 }

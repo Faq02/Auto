@@ -30,6 +30,7 @@
 #include "win_help.h"
 #include "logger.h"
 #include "converter.h"
+#include "Files_checker.h"
 
 static constexpr auto EXIT_CODE = -1;
 using namespace std;
@@ -66,8 +67,14 @@ void EnableANSI() {
 
 static void create_group_shortcut() {
     //std::wcout << get<std::wstring>(readFile("group", false));
+    vector<wstring> lines = get<vector<wstring>>(readFile({ .file_path = FILE_NAMES.at(FileType::Group), .isVector = true }));
+    if (lines.empty() || (lines.size() == 1 && lines[0].empty())) {
+        colorfulPrint(L"\nУ тебя нету групп", PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::RED);
+        countdown(4, L"Осталось для возвращения ", 1);
+        return;
+    }
     int group_number = advansed_chooser({ 
-        .lines_to_choose = get<vector<wstring>>(readFile({.file_path = FILE_NAMES.at(FileType::Group), .isVector = true})),
+        .lines_to_choose = lines,
         .singleChoice = true, 
         .title = L"Выберите группу для создания ярлыка:\n" })[0];
     if (group_number == EXIT_CODE) return;
@@ -222,7 +229,7 @@ int main(int argc, char* argv[]) {
     _setmode(_fileno(stdout), _O_U16TEXT);
     _setmode(_fileno(stdin), _O_U16TEXT);
     start_new_log();
-
+    log(L"привет");
     if (!std::filesystem::exists("python_embed") ||
         !std::filesystem::exists("python_embed/python310.zip")) {
         log(L"ОШИБКА: Папка python_embed или python310.zip не найдены!\n");

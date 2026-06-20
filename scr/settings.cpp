@@ -106,41 +106,6 @@ std::wstring prog_settings(bool change = false, short num_to_read = NULL) //mode
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 const std::map<std::wstring, std::wstring> PATH_CHOOSE_VIEW = {
     {L"1", L"Консоль-страндарт"},
     {L"2", L"По вин-путям"}

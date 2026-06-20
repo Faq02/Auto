@@ -24,6 +24,8 @@ using std::wstring;
 using std::string;
 using std::get;
 
+constexpr int standart_lines_count = 4;
+
 constexpr int Delete = 2;
 constexpr int Replace = 1;
 constexpr int Add = 3;
@@ -94,7 +96,7 @@ private:
 	vector<wstring> translated_scrlines; //переведённые скрипты
 	int action_type;
 	vector<int> nums_to_delete;
-	string name;
+	string name; //для скриптов относительынй путь \scripts\name, для групп не используется
 
 public:
 	struct ModeConfig {
@@ -206,7 +208,7 @@ public:
 					std::wcout << line + L"\n";
 				}
 				system("pause");
-				content = massive_replace_line(content, line_num+4, new_line); //сразу обновляем и меняем
+				content = massive_replace_line(content, line_num+standart_lines_count, new_line); //сразу обновляем и меняем
 				std::wcout << L"after: \n";
 				for (wstring line : content) {
 					std::wcout << line + L"\n";
@@ -230,7 +232,7 @@ public:
 			if (mode == FileType::Script) {
 				new_line = python_script_make("", true, nullptr);
 				new_line.pop_back();
-				content = add_to_massive(content, line_num+4, new_line);
+				content = add_to_massive(content, line_num+standart_lines_count, new_line);
 				return 0;
 			}
 			new_line = group_add(CURRENT_SETTINGS.path_view_num, true);
@@ -242,8 +244,8 @@ public:
 	}
 	void save_changes() {
 		if (mode == FileType::Script) {
-			if (std::filesystem::exists(name.substr(1))) {
-				if (remove((name.substr(1)).c_str()) == 0) { ; }
+			if (std::filesystem::exists(name)) {
+				if (remove(name.c_str()) == 0) { ; }
 				else {
 					std::wcerr << L"Ошибка при удалении старого файла";
 				}

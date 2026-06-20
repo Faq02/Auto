@@ -1,6 +1,4 @@
 #pragma once
-#include <string>
-#include <vector>
 #include "app_config.h"
 
 std::string getFileName(FileType type);

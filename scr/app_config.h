@@ -27,7 +27,8 @@ static const std::map<std::wstring, std::wstring> sorted_dict = {
     {L"pyautogui.hotkey", L"нажатие горячей клавиши: " },
     {L"keyboard.write", L"ввод с клавиатуры: " },
     {L"pyautogui.press", L"нажатие клавиши: "},
-    {L"pyautogui.moveTo", L"передвинуть мышку на координаты" }
+    {L"pyautogui.moveTo", L"передвинуть мышку на координаты" },
+    {L"os.system", L"условно(наделе выолнение команды cmd) запуск: "}
 };
 struct PRINT_TEXTCOLOR {
     inline static const std::wstring BLACK = L"\033[30m";
@@ -49,4 +50,11 @@ struct PRINT_BACKGROUNDCOLOR {
     inline static const std::wstring MAGENTA = L"\033[45m";
     inline static const std::wstring CYAN = L"\033[46m";
     inline static const std::wstring WHITE = L"\033[47m";
+};
+
+struct SelectedItem {
+    std::wstring path;    // путь, ссылка или команда
+    std::wstring flags;   // флаги (если нужны)
+    bool is_link = false; // true – это ссылка (требует start)
+    bool cancelled = false; // пользователь отказался
 };

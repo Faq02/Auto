@@ -127,6 +127,7 @@ public:
         case (int)MODE::CHANGE:
             changer(type, python);
             return;
+
         case (int)MODE::ADDwithFLAGS:
             add_script_logic();
             add_with_flags_logic();

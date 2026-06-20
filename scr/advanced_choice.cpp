@@ -432,7 +432,7 @@ void DrawMenu(const std::vector<std::wstring>& display_lines,
 std::vector<int> advansed_chooser(MenuOptions options) {
     _setmode(_fileno(stdout), _O_U16TEXT);
     
-
+    if (options.lines_to_choose.empty()) return {};
     std::vector<std::wstring> display_lines = PrepareDisplayLines(options.lines_to_choose);
 
     std::vector<int> line_heights;
@@ -455,9 +455,16 @@ std::vector<int> advansed_chooser(MenuOptions options) {
         start_positions.push_back(current_position);
         current_position += height;
     }
-    bool from_scripts = options.lines_to_choose[0] == L"добавить Клик по координатам" && options.singleChoice;
+    bool from_scripts = !options.lines_to_choose.empty() &&
+        options.lines_to_choose[0] == L"добавить Клик по координатам" &&
+        options.singleChoice;
+
     bool from_groups_make = (options.title.length() >= 6 && options.title.starts_with(L"Режим:"));
-    bool from_changer_and_del_lines = (options.lines_to_choose.back() == L"Закончить" && !options.singleChoice);
+
+    // Проверяем, что список не пуст перед вызовом .back()
+    bool from_changer_and_del_lines = !options.lines_to_choose.empty() &&
+        options.lines_to_choose.back() == L"Закончить" &&
+        !options.singleChoice;
     //ClearScreen();
     //std::wcout << options.lines_to_choose.back(); Sleep(3000);
     //std::wcout << from_changer_and_del_lines; Sleep(3000);
@@ -742,3 +749,203 @@ std::vector<int> advansed_chooser(MenuOptions options) {
 //const int EnterKey = VK_RETURN;
 //const int MyCustomReturn = VK_RETURN; // Еще один вариант имени
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+struct TitleLayout {
+    std::vector<std::wstring> title_lines;  // строки заголовка после split по '\n'
+    int buffer = 0;            // ширина одной колонки (в символах)
+    int columns = 1;           // количество колонок
+    int height = 0;            // полная высота заголовка (в строках консоли)
+};
+
+/// Настройки меню, передаваемые пользователем
+struct MenuOptions {
+    std::vector<std::wstring> lines_to_choose; ///< Строки пунктов меню
+    bool singleChoice = true;                 ///< true – выбор одного, false – множественный
+    std::wstring title;                       ///< Заголовок меню (может быть пустым)
+    // В будущем сюда можно добавить флаги для подменю и действий при наведении
+};
+
+
+class advanced_chooser {
+public:
+
+private:
+    MenuOptions options;
+
+    // Состояние меню
+    std::set<int> m_selected;              // индексы выбранных пунктов (0-based)
+    int m_hover = 0;                       // индекс пункта под курсором / выделением
+    bool m_inputMode = false;              // true, если активен режим ввода чисел (множ. выбор)
+    std::wstring m_inputLine;             // набранное число в режиме ввода
+    int m_cursorX = 0;                    // позиция курсора в поле ввода
+
+    // Вычисленные размеры и разбивка
+    TitleLayout title_layout;            // параметры заголовка
+    std::vector<std::wstring> m_displayLines; // строки меню с быстрыми клавишами (подготовленные)
+    std::vector<int> lineHeights;       // высота каждой строки меню в строках консоли
+    std::vector<int> lineStartY;        // смещение начала каждой строки меню от menuStartY
+    int m_menuStartY = 0;                 // Y-координата начала области меню
+
+    // Параметры консоли
+    int console_width;
+    int console_height;
+    HANDLE hConsoleOutput = nullptr;
+    HANDLE handleInput;
+    DWORD original_console_mode;
+
+    // Звуки
+    std::vector<std::string> m_hoverSoundPaths; ///< пути к случайным звукам наведения
+    std::string m_selectSoundPath;              ///< путь к звуку выбора
+
+    // Генератор случайных чисел для звуков наведения
+    std::mt19937 m_rng;
+
+    // Быстрые клавиши (статический набор)
+    static const std::vector<wchar_t> QuickKeys;
+
+
+
+
+
+
+    //буквально просто ставит цифру или букву перед линией по индексу
+    std::vector<std::wstring> PrepareDisplayLines(const std::vector<std::wstring>& original) {
+        std::vector<std::wstring> display_lines;
+
+        for (int i = 0; i < (int)original.size(); i++) {
+            wchar_t quick_key = (i < (int)quick_keys.size()) ? quick_keys[i] : L' ';
+            std::wstring key_display = (quick_key != L' ') ?
+                std::wstring(L"") + quick_key + L"-" : L"    ";
+
+            display_lines.push_back(key_display + original[i]);
+        }
+
+        return display_lines;
+    }
+
+    int FindQuickKeyIndex(wchar_t key) {
+        wchar_t lower_key = towlower(key);
+        auto it = std::find(quick_keys.begin(), quick_keys.end(), lower_key);
+        if (it != quick_keys.end()) {
+            return std::distance(quick_keys.begin(), it);
+        }
+        return -1;
+    }
+    //расчитывает высоту и высоту начала каждого пункта меню
+    void calculate_line_hights() {
+        int height = 1; // хотя бы одна строка
+        int current_line_len = 0;
+        for (auto& line : options.lines_to_choose) {
+            lineStartY.push_back(height);
+            for (size_t i = 0; i < line.size(); ++i) {
+                if (line[i] == L'\n') {
+                    height++;
+                    current_line_len = 0;
+                }
+                else {
+                    current_line_len++;
+                    if (current_line_len > console_width) {
+                        height++;
+                        current_line_len = 1; // символ переносится
+                    }
+                }
+            }
+            lineHeights.push_back(height);
+        }
+    }
+
+    void calculate_title_layout() {
+        std::vector<std::wstring> title_lines = split(options.title, L'\n');
+        int max_height = max_console_lines; // сколько строк доступно для заголовка
+        int best_columns = 1;
+        int best_height = INT_MAX;
+
+        // Пробуем количество колонок от 1 до 5 (или пока ширина колонки >= 10)
+
+        for (int cols = 1; cols <= 5; ++cols) {
+            int col_width = console_width / cols;
+            if (col_width < 10) break; // слишком узкие колонки – неудобно
+
+            // Вычисляем высоту каждой колонки
+            std::vector<int> col_height(cols, 0);
+            for (size_t idx = 0; idx < title_lines.size(); ++idx) {
+                int col = idx % cols;
+                int len = title_lines[idx].length();
+                int parts = (len + col_width - 1) / col_width; // ceil деление
+                col_height[col] += parts;
+            }
+            int total_height = *std::max_element(col_height.begin(), col_height.end());
+
+            if (total_height <= max_height) {
+                best_columns = cols;
+                best_height = total_height;
+                break; // нашли оптимальное (чем меньше колонок, тем лучше)
+            }
+            if (total_height < best_height) {
+                best_columns = cols;
+                best_height = total_height;
+            }
+        }
+        int buffer = console_width / best_columns;
+        if (buffer < 1) buffer = 1;
+        title_layout.title_lines = title_lines;
+        title_layout.buffer = buffer;
+        title_layout.columns = best_columns;
+        title_layout.height = best_height;
+    }
+
+    const std::pair<int, int> calculate_visible_Range() {
+
+    }
+
+
+
+    //функции консоли
+    void set_cursor_show(bool show) {
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &cursorInfo);
+        cursorInfo.bVisible = show;
+        SetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &cursorInfo);
+    }
+    void init_console_state() {
+        handleInput = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD console_mode;
+        GetConsoleMode(handleInput, &console_mode);
+        original_console_mode = console_mode;
+        console_mode |= ENABLE_EXTENDED_FLAGS;
+        console_mode &= ~ENABLE_QUICK_EDIT_MODE;
+        console_mode |= ENABLE_MOUSE_INPUT;
+        SetConsoleMode(handleInput, console_mode);
+    }
+    void reset_console_state() { SetConsoleMode(handleInput, original_console_mode); }
+    void set_console_params() {
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+        console_width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        console_height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    }
+
+    
+    
+    void handle_input_loop() {
+
+    }
+};
