@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 #include <map>
 enum class FileType { Game, Program, Link, Script, Group, Settings, Scrtemp, Asadmintmp, Grouptmp, null };
 static const std::map<FileType, std::string> FILE_NAMES = {
@@ -14,9 +15,23 @@ static const std::map<FileType, std::string> FILE_NAMES = {
     {FileType::Grouptmp, "Grouptmp.txt"},
     {FileType::null, ""},
 };
+struct LineEntry
+{
+    std::wstring path;
+    std::wstring name;
+    std::wstring flags;
+    int id;
+};
+/*
+это все FileType файлы с линиями для запуска и другой работы в таком содержании в таком виде:
+          Games    0 : { {id1 : line_entry1},{id2 : line_entry2}   }
+          Programs 1 : { {id1 : line_entry1},{id2 : line_entry2}   }
+*/
+inline std::map<FileType, std::vector<LineEntry>> global_all_lines;
 struct Flags {
     static inline const std::wstring Asadmin = L"Asadmin";
     static inline const std::wstring CloseAfter = L"CloseAfter";
+    static inline const std::wstring Separate = L"Separate";
 };
 inline std::string getFileName(FileType type) {
     return FILE_NAMES.at(type);
@@ -39,6 +54,7 @@ struct PRINT_TEXTCOLOR {
     inline static const std::wstring MAGENTA = L"\033[35m";
     inline static const std::wstring CYAN = L"\033[36m";
     inline static const std::wstring WHITE = L"\033[37m";
+    inline static const std::wstring RESET = L"\033[0m";
 };
 
 struct PRINT_BACKGROUNDCOLOR {
@@ -50,11 +66,13 @@ struct PRINT_BACKGROUNDCOLOR {
     inline static const std::wstring MAGENTA = L"\033[45m";
     inline static const std::wstring CYAN = L"\033[46m";
     inline static const std::wstring WHITE = L"\033[47m";
+    inline static const std::wstring RESET = L"\033[0m";
 };
 
 struct SelectedItem {
-    std::wstring path;    // путь, ссылка или команда
-    std::wstring flags;   // флаги (если нужны)
-    bool is_link = false; // true – это ссылка (требует start)
-    bool cancelled = false; // пользователь отказался
+    bool cancelled = false;// пользователь отказался
+    int id;
+    std::wstring manual_path;
+    std::wstring flags;
+    
 };

@@ -10,7 +10,7 @@
 #include <unordered_set>
 #include "advanced_choice.h"
 
-#include "python_script_maker.h"
+
 #include "StartFuncs.h"
 #include "settings.h"
 #include "Groups.h"
@@ -18,6 +18,8 @@
 #include "path_handler.h"
 #include "converter.h"
 #include "data_work.h"
+#include "logger.h"
+#include "ui_interactions.h"
 
 using std::vector;
 using std::wstring;
@@ -34,7 +36,7 @@ constexpr int BACK_TO_OBJECT = 1002;
 constexpr int EXIT_SAVE = 1003;
 constexpr int EXIT_NO_SAVE = 1004;
 constexpr int CONTINUE = 1005;
-constexpr int ESCAPE = -1;
+constexpr int EXIT_CODE = -1;
 
 template<typename T>
 bool isOneOf(T value, std::initializer_list<T> options) {
@@ -114,8 +116,8 @@ public:
 
 	int choose_object() {
 		vector<wstring> lines_to_choose;
-		if (mode == FileType::Group) lines_to_choose = show_groups(CURRENT_SETTINGS.showlines_num);
-		else { lines_to_choose = showfile(FileType::Script, CURRENT_SETTINGS.showlines_num); }
+		
+		lines_to_choose = showfile(FileType::Script, CURRENT_SETTINGS.showlines_num);
 
 		object_num = advansed_chooser({ .lines_to_choose = lines_to_choose, .singleChoice = true, .title = L"Выберите " + config.what_choose + L"\n" })[0];
 		return object_num;
@@ -123,23 +125,13 @@ public:
 	
 	int get_object_contents() {
 		if (mode == FileType::Script) {
-			wstring path = choose_line(object_num, FileType::Script);
-			std::wstring path_name = extract_filename(path);
+			wstring path = global_all_lines[FileType::Script][object_num-1].path;
+			std::wstring path_name;
+			path_name = extract_filename(path);
 			name = WstringTo_Utf8(path_name);
 			name = "scripts\\" + name;
 			content = get<std::vector<std::wstring>>(readFile({ .file_path = name, .isVector = true }));
 			return 0;
-		}
-		wstring line = choose_line(object_num, FileType::Group,true);
-		size_t start = 0;
-		//получение линий группы - старый вариант без имён и флагов входящих в неё элементов
-		for (size_t i = 0; i <= line.length(); i++) {
-			if (i == line.length() || line[i] == L'|') {
-				if (i > start) {  // Избегаем пустых строк
-					content.push_back(line.substr(start, i - start));
-				}
-				start = i + 1;
-			}
 		}
 	}
 
@@ -161,7 +153,7 @@ public:
 					.lines_to_choose = config.lines_to_choose,
 					.singleChoice = true,
 					.title = action_type == Replace ? L"Выберите строку для изменения\n" : L"Выберите строку после которой будет добавлена новая\n" })[0];
-			if (line_num == ESCAPE) { return ESCAPE; }
+			if (line_num == EXIT_CODE) { return EXIT_CODE; }
 			if (line_num == config.lines_to_choose.size()) { return EXIT_SAVE; }
 			if (line_num == config.lines_to_choose.size() - 1) { return BACK_TO_OBJECT; }
 			if (line_num == config.lines_to_choose.size() - 2) { return BACK_TO_ACTION; }
@@ -171,7 +163,7 @@ public:
 				.lines_to_choose = config.lines_to_choose,
 				.singleChoice = false,
 				.title = L"Выберите строки для удаления\n" });
-		if (nums_to_delete.back() == ESCAPE) { nums_to_delete.pop_back(); return ESCAPE; }
+		if (nums_to_delete.back() == EXIT_CODE) { nums_to_delete.pop_back(); return EXIT_CODE; }
 		if (nums_to_delete.back() == config.lines_to_choose.size() - 2) { nums_to_delete.pop_back(); return BACK_TO_ACTION; }
 		if (nums_to_delete.back() == config.lines_to_choose.size() - 1) { nums_to_delete.pop_back(); return BACK_TO_OBJECT; }
 		if (nums_to_delete.back() == config.lines_to_choose.size()) { nums_to_delete.pop_back(); return EXIT_SAVE; }
@@ -195,12 +187,12 @@ public:
 		}
 		return action;
 	}
-	int action_handler(PythonRuntime* python) {
+	int action_handler() {
 		//show_and_choose_object_content();
 		std::wstring new_line;
 		if (action_type == Replace) {
 			if (mode == FileType::Script) {
-				new_line = python_script_make("", true, python);
+				
 				new_line.pop_back(); //удаляем \n который там создаётся
 				//delete_lines_or_insert_or_add_one("scrtmp", {}, true, new_line, line_num + 4, false, false);
 				std::wcout << L"before mass changes: \n";
@@ -216,9 +208,6 @@ public:
 				system("pause");
 				return 0;
 			}
-			new_line = group_add(CURRENT_SETTINGS.path_view_num, true);
-			content = massive_replace_line(content, line_num, new_line);
-			return 0;
 		}
 		if (action_type == Delete) {
 			/*for(int li : nums_to_delete) {
@@ -230,16 +219,11 @@ public:
 		}
 		if (action_type == Add) {
 			if (mode == FileType::Script) {
-				new_line = python_script_make("", true, nullptr);
+				
 				new_line.pop_back();
 				content = add_to_massive(content, line_num+standart_lines_count, new_line);
 				return 0;
 			}
-			new_line = group_add(CURRENT_SETTINGS.path_view_num, true);
-			if (!new_line.empty() && new_line.back() == L'|')
-				new_line.pop_back();
-			content = add_to_massive(content, line_num, new_line);
-			return 0;
 		}
 	}
 	void save_changes() {
@@ -252,18 +236,6 @@ public:
 			}
 			writefile(content, name, "", false);
 			return;
-		}
-		if (mode == FileType::Group) {
-			std::wstring retern_line;
-			for (size_t i = 0; i < content.size(); i++) {
-				retern_line += content[i] +L'|';// group_add итак добавляет | в конец
-			}
-			//retern_line.pop_back();//удаление последнего | зачем если логика с ним...
-			//std::wcout << object_num << L"\n";
-			//system("pause");
-			delete_lines_or_insert_or_add_one(FileType::Group, {}, true, retern_line, object_num, false, false);
-			//std::wcout << object_num << L"\n";
-			//system("pause");
 		}
 	}
 	//void clear_lines() 
@@ -278,69 +250,208 @@ public:
 //	return false;
 //}
 
-static void change_lines(FileType type) {
+
+
+
+
+
+
+
+
+void change_lines(FileType type, int id = 0) {
 	//добавить выбор: путь, флаг, имя
 	read_set(); //если расчитать возможный путь сюда, возможно можно избавиться
-	vector<LineEntry> file_entry = file_parser(type);
-	vector<wstring> paths, names_accord_sett,flags;
-	wstring shownamesSett = prog_settings(false, 3);
-	bool no_names = shownamesSett == L"3";
-	names_accord_sett = showfile(type, shownamesSett);
-	if (no_names) names_accord_sett = showfile(type, L"1");
+	LineEntry old_line_entry;
+	if (id == 0) {
+		vector<wstring> paths, names_accord_sett, flags;
+		vector<int> ids = {};
+		wstring shownamesSett = prog_settings(false, 3);//навсякий читаем прям из файла
 
-	for (const auto& entry : file_entry) {
-		paths.push_back(entry.path);
-		flags.push_back(entry.flags);
+		for (const auto& entry : global_all_lines[type]) {
+			paths.push_back(entry.path);
+			flags.push_back(entry.flags);
+			ids.push_back(entry.id);
+		}
+
+		names_accord_sett = showfile(type, shownamesSett);
+		vector<wstring> lines_to_choose;
+		for (int i = 0; i < paths.size(); ++i) {
+			lines_to_choose.push_back(
+				L"Имя: " + names_accord_sett[i] + L"\n" +
+				L"  Флаги: " + flags[i] + L"\n" +
+				L"  Путь: " + paths[i] + L"\n" +
+				L"  ID: " + std::to_wstring(ids[i]) //вообще может лучше не показывать его пользователю?
+			);
+		}
+
+		int line_num = advansed_chooser({
+			.lines_to_choose = lines_to_choose,
+			.singleChoice = true,
+			.title = L"Выберите объект для изминения:\n\033[31mесли в настроках стоит:\"показывать пути\",то автоматом ставится:\"имена/.exe имя\"!\n\033[0m" })[0];
+		if (line_num == EXIT_CODE) return;
+		old_line_entry = global_all_lines[type][line_num - 1];
 	}
-
-	names_accord_sett = showfile(type, prog_settings(false, 3));
-	vector<wstring> lines_to_choose;
-	for (int i = 0; i < paths.size(); ++i) {
-		lines_to_choose.push_back(L"Имя: " + names_accord_sett[i] + L"\n" + L"Флаги: " + flags[i] + L"\n" + L"Путь: " + paths[i]);
+	
+	if (id > 0) {
+		if (const auto* entry_ptr = get_entry_by_id(type, id)) {
+			old_line_entry = *entry_ptr;
+		}
+		else {log(L"changer.cpp 293 empty by id=" + std::to_wstring(id));}
 	}
-
-	int line_num = advansed_chooser({
-		.lines_to_choose = lines_to_choose,
-		.singleChoice = true,
-		.title = L"Выберите объект для изминения:\n\033[31mесли в настроках стоит:\"показывать пути\",то автоматом ставится:\"имена/.exe имя\"!\n\033[0m"})[0];
-	if (line_num == ESCAPE) return;
-	LineEntry line_entry = line_parser(type, line_num, L"");
 	bool end = false;
 	wstring new_name;
-	wstring new_line;
+	LineEntry new_line;
 	int action;
 	wstring path_choose_view_set = prog_settings(false, 1);
+	
 	while (end != true) {
 		action = advansed_chooser({
 			.lines_to_choose = {L"Имя", L"Флаги", L"Путь", L"Закончить"},
 			.singleChoice = true,
 			.title = L"Выберите что менять:\nЕсли нет кастомного имени берётся СТАРЫЕ ФЛАГИ ЗАМЕНЯТСЯ .exe-имя\n" })[0];
+		std::vector<LineEntry> vec;
 		switch (action) {
 		case 1:
-			if (line_num == -1) { return; }
-			new_name = input_line(L"Введите новое имя\nБыло: " + (line_entry.name.empty() ? L" - " : line_entry.name));
-			new_line = line_entry.path + L"\"" + new_name + L"\"" + line_entry.flags;
-			delete_lines_or_insert_or_add_one(type, {}, true, new_line, line_num, false, false);
+			new_name = input_line(L"Введите новое имя\nБыло: " + (old_line_entry.name.empty() ? L" {имени не было} " : old_line_entry.name));
+			new_line.name = new_name;
+			replace_entity({.type=type,.old_line=old_line_entry,.new_line_entry=new_line,.full=false,.path=false,.name=true,.flags=false});
 			break;
 		case 2:
-			new_line = line_entry.path + L"\"" + line_entry.name + L"\"" + make_flags();
-			delete_lines_or_insert_or_add_one(type, {}, true, new_line, line_num, false, false);
+			new_line.flags = choose_and_make_flags(old_line_entry.flags);
+			replace_entity({ .type = type,.old_line = old_line_entry,.new_line_entry = new_line,
+				.full = false,
+				.flags = true });
+			
 			break;
 		case 3:
-			new_line = choose_file_on_pc(path_choose_view_set,type) + L"\"" + line_entry.name + L"\"" + line_entry.flags;
-			delete_lines_or_insert_or_add_one(type, {}, true, new_line, line_num, false, false);
+			new_line.path = choose_file_on_pc(path_choose_view_set, type);
+			
+			replace_entity({ .type = type,.old_line = old_line_entry,.new_line_entry = new_line,
+				.full = false,
+				.path = true });
 			break;
 		default: end = true; break; // что-то кроме 1 2 3 - выходим, хотя возможно надо было дать 2 шанс 
 		}
 	}
-
-
-
 }
 
 
-int changer(FileType mode, PythonRuntime* python = nullptr) {
-	if (mode != FileType::Script and mode != FileType::Group) { change_lines(mode); return 0; }
+
+std::wstring change_childs(FlagsContents flags) { //перенести в changer.cpp
+	std::map<int, std::wstring> file_types_wstr = {
+		{0,L"Игра"},
+		{1,L"Программа"},
+		{2,L"Ссылка"},
+		{3,L"Скрипт"},
+		{4,L"Группа"}
+	};
+	/*
+	Редактирование детей для "Моя запись":
+
+	Текущие дети:
+	  1. Игра: "Cyberpunk 2077"
+	  2. Программа: "Discord"
+	  3. Ссылка: "YouTube"
+
+	Выберите действие:
+	  [1] Добавить детей
+	  [2] Удалить детей
+	  [3] Закончить
+	*/
+	struct ChildInfo { FileType type; int id = 0; };
+	std::vector<ChildInfo> all_children = {};
+	for (const auto& [type, ids] : flags.Children) {
+		for (int id : ids) {
+			all_children.push_back({ type, id });
+		}
+	}
+
+	/*std::map<FileType, std::vector<int>> flags.Children*/
+
+
+
+
+
+	while (true) {
+
+		
+		
+		std::vector<std::wstring> lines_to_show = {};
+		for (const auto& child : all_children) {
+			const LineEntry* entry = get_entry_by_id(child.type, child.id);
+			std::wstring name = L"";
+			name = get_name_accords_sett(entry, CURRENT_SETTINGS.showlines_num, child.type);
+			lines_to_show.push_back(file_types_wstr[(int)child.type] + L':' + name);
+		}
+		int childs_size = static_cast<int>(lines_to_show.size());
+		lines_to_show.push_back(L"-");
+		lines_to_show.push_back(L"Добавить");
+		lines_to_show.push_back(L"Удалить");
+		lines_to_show.push_back(L"Закончить");
+		int choice = advansed_chooser({
+			.lines_to_choose = lines_to_show,
+			.singleChoice = true,
+			.title = L"Выберите дочерние элементы для изминения самой линии(на которую указывает) или выберите действие" })[0];
+		
+		if (choice == EXIT_CODE) break;
+		
+		if (choice <= childs_size) {
+			ChildInfo chousen_child = all_children[choice - 1];
+			change_lines(chousen_child.type, chousen_child.id);
+			continue;
+		}
+		if (choice == childs_size + 1) continue;
+		int add = childs_size + 2;
+		int del = childs_size + 3;
+		int end = childs_size + 4;
+		if (choice == add) {
+			auto [file_type, chosen] = ask_lines_in_file_type();
+			for (size_t i = 0; i < chosen.size(); ++i) {
+				ChildInfo new_child;
+				new_child.type = file_type;
+				new_child.id = global_all_lines[file_type][chosen[i] - 1].id;
+				all_children.push_back(new_child);
+			}
+			continue;
+		}
+		if (choice == del) {
+			std::vector<int> lines_to_del = advansed_chooser({
+			.lines_to_choose = lines_to_show,
+			.singleChoice = false,
+			.title = L"Выберите элементы для удаления" });
+			std::sort(lines_to_del.begin(), lines_to_del.end(), std::greater<int>());
+			for (int idx : lines_to_del) {
+				if (idx >= 1 && idx <= all_children.size()) {
+					all_children.erase(all_children.begin() + (idx - 1));
+				}
+			}
+			continue;
+		}
+		if(choice == end) break;
+
+	}
+	//сохранение
+	//удачи понимать
+	std::map<FileType, std::vector<int>> grouped;
+	for (const auto& child : all_children) {
+		grouped[child.type].push_back(child.id);
+	}
+
+	std::wstring new_child_flag = L"Children";
+	for (const auto& [type, ids] : grouped) {
+		new_child_flag += L"{" + std::to_wstring(static_cast<int>(type)) + L"-";
+		for (size_t i = 0; i < ids.size(); ++i) {
+			if (i > 0) new_child_flag += L",";
+			new_child_flag += std::to_wstring(ids[i]);
+		}
+		new_child_flag += L"}";
+	}
+	return new_child_flag;
+
+}
+
+int changer(FileType mode) {
+	if (mode != FileType::Script and mode != FileType::Group) { change_lines(mode, 0); return 0; }
 	Changer editor;
 	editor.setconfig(mode);
 	bool end =false;
@@ -349,21 +460,21 @@ int changer(FileType mode, PythonRuntime* python = nullptr) {
 	while (true) {
 		if (end) { break; }
 		// 1. ВЫБОР ОБЪЕКТА
-		if (editor.choose_object() == ESCAPE) return 0;
+		if (editor.choose_object() == EXIT_CODE) return 0;
 
 		// 2. ЗАГРУЗКА
 		editor.get_object_contents();
 		if (mode == FileType::Script) editor.translate_contents_for_scripts();
 
-		// 3. ГЛАВНЫЙ ЦИКЛ РЕДАКТИРОВАНИЯ
-		//ПРОБЛЕМА: обект не меняется.
+		// 3. ЦИКЛ РЕДАКТИРОВАНИЯ
+		
 		while (true) {
 			// 3.1 Выбор действия
 			if (!changed) { action = editor.choose_object_action(); }
 			changed = false;
 
-			if (action == BACK_TO_OBJECT or action == ESCAPE) {
-				// Сохранить текущий? (спросить пользователя)
+			if (action == BACK_TO_OBJECT or action == EXIT_CODE) {
+				// спросить пользователя?
 				//не чувак мы просто сохраняем не спрашивая
 				editor.save_changes();
 				// Выбрать новый объект
@@ -379,7 +490,7 @@ int changer(FileType mode, PythonRuntime* python = nullptr) {
 			// 3.2 Выбор строки для действия
 			int selection = editor.show_and_choose_object_content();
 
-			if (selection == BACK_TO_ACTION or selection == ESCAPE) continue;
+			if (selection == BACK_TO_ACTION or selection == EXIT_CODE) continue;
 			if (selection == BACK_TO_OBJECT) {
 				editor.save_changes();
 				// Вернуться к выбору объекта
@@ -392,7 +503,7 @@ int changer(FileType mode, PythonRuntime* python = nullptr) {
 			}
 
 			// 3.3 Выполнение действия
-			editor.action_handler(python);
+			editor.action_handler();
 			changed = true;
 			// 3.4 Обновить перевод (если скрипт)
 			if (mode == FileType::Script) editor.translate_contents_for_scripts();

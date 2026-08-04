@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
-#include <Python.h>
 #include <cwctype>
 #include <taskschd.h>
 #include <comdef.h>
@@ -26,9 +25,11 @@
 #include "logger.h"
 #include "ui_interactions.h"
 #include "win_help.h"
+#include "fq-start.h"
 
 namespace fs = std::filesystem;
 
+#pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "taskschd.lib")
 #pragma comment(lib, "comsupp.lib")
 
@@ -77,69 +78,6 @@ static std::wstring shell_error_control(int cod_error) {
 }
 
 
-PythonRuntime::PythonRuntime() : m_initialized(false) {
-    std::wstring pythonHome = L"./python_embed";
-    Py_SetPythonHome(pythonHome.c_str());
-    std::wstring pythonPath = pythonHome + L"/python310.zip;" +
-        pythonHome + L"/DLLs;" +
-        pythonHome + L"/lib;" +
-        L"./python_libs";
-    Py_SetPath(pythonPath.c_str());
-    Py_Initialize();
-
-    PyRun_SimpleString(
-        "import sys\n"
-        "sys.path.insert(0, './python_libs')\n"
-    );
-
-    m_initialized = true;
-    std::wcout << L"[INFO] PythonRuntime создан.\n";
-}
-
-PythonRuntime::~PythonRuntime() {
-    if (m_initialized) {
-        Py_Finalize();
-        std::wcout << L"[INFO] PythonRuntime уничтожен.\n";
-    }
-}
-
-int PythonRuntime::execute(const std::string& code) {
-    if (!m_initialized) return -1;
-    return PyRun_SimpleString(code.c_str());
-}
-
-bool PythonRuntime::execute_safe(const std::string& code) {
-    if (!m_initialized) {
-        std::wcerr << L"[ERROR] Python не инициализирован!" << std::endl;
-        return false;
-    }
-
-    if (code.empty()) {
-        std::wcerr << L"[ERROR] Пустой код для выполнения!" << std::endl;
-        return false;
-    }
-
-    std::wcout << L"[DEBUG] Выполнение Python кода (" << code.length() << L" байт)" << std::endl;
-
-    std::string wrapped_code =
-        "import sys\n"
-        "import traceback\n"
-        "try:\n"
-        "    exec(r'''" + code + "''')\n"
-        "    _success = True\n"
-        "    print('\\033[32mВыполнение завершено успешно\\033[0m')\n"
-        "except Exception as e:\n"
-        "    print('\\033[31mPython Error:\\033[0m', e)\n"
-        "    traceback.print_exc()\n"
-        "    _success = False\n";
-
-    int result = execute(wrapped_code);
-    if (result != 0) {
-        std::wcerr << L"[ERROR] Ошибка выполнения Python, код: " << result; Sleep(10000);
-    }
-    //Sleep(100000);
-    return (result == 0);
-}
 
 static std::wstring GetCurrentWorkingDirectory() {
     wchar_t buffer[MAX_PATH];
@@ -207,12 +145,93 @@ std::wstring del_close_after(std::wstring flags) {
 }
 
 
-static HINSTANCE RunFile(std::wstring path, FileType type, int line_num = NULL, PythonRuntime* python = nullptr, std::string code_from_scr_make="") {
+
+
+
+bool LaunchSeparate(const std::wstring& path) {
+    
+
+    fs::path exePath(path);
+    std::wstring workDir = exePath.parent_path().wstring();
+    
+    
+
+    // Копируем путь, так как CreateProcessW может изменять строку аргументов
+    std::wstring cmd = L"\"" + path + L"\"";
+
+    // Переводим рабочую директорию в понятный для WinAPI формат
+    LPCWSTR lpCurrentDirectory = workDir.empty() ? NULL : workDir.c_str();
+
+
+    HANDLE hNul = CreateFileW(
+        L"NUL",
+        GENERIC_WRITE,
+        FILE_SHARE_WRITE | FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+
+    if (hNul == INVALID_HANDLE_VALUE) {
+        std::cerr << "Не удалось открыть NUL-устройство." << std::endl;
+        return false;
+    }
+
+    SetHandleInformation(hNul, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+
+
+    
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+
+    si.hStdOutput = hNul; // Заглушка для стандартного вывода
+    si.hStdError = hNul; // Заглушка для ошибок
+    si.hStdInput = NULL;
+    si.dwFlags |= STARTF_USESTDHANDLES; // Говорим системе использовать наши дескрипторы
+
+    ZeroMemory(&pi, sizeof(pi));
+
+
+    BOOL bSuccess = CreateProcessW(
+        NULL,
+        &cmd[0],
+        NULL,
+        NULL,
+        TRUE, // ВАЖНО: Разрешаем наследовать дескриптор NUL
+        CREATE_NO_WINDOW | DETACHED_PROCESS, // Комбинируем флаги скрытия
+        NULL,
+        workDir.empty() ? NULL : workDir.c_str(),
+        &si,
+        &pi
+    );
+
+    CloseHandle(hNul);
+    if (!bSuccess) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        std::cerr << "Ошибка запуска. Код: " << GetLastError() << std::endl;
+        return false;
+    }
+
+    // Закрываем хэндлы, чтобы не было утечки памяти (процесс останется жить)
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return true;
+}
+
+
+
+
+static HINSTANCE RunFile(std::wstring path, FileType type, std::string code_from_scr_make="") {
     // Проверяем расширение файла
-    log(L"вход в RunFile\nпуть:" + path + 
-        L"\nтип:" + StringToWstring(FILE_NAMES.at(type))+ 
-        L"\nномер линии:" + std::to_wstring(line_num));
-    log(L"  python: " + std::wstring(python ? L"OK\n" : L"NULL\n"));
+    log(L"вход в RunFile\nпуть:" + path +
+        L"\nтип:" + StringToWstring(FILE_NAMES.at(type)));
+        
+
     if (!code_from_scr_make.empty()) {log(L"  code: <present, size=" + std::to_wstring(code_from_scr_make.size()) + L">");}
     
     if (type == FileType::Script || !code_from_scr_make.empty()) {
@@ -225,44 +244,14 @@ static HINSTANCE RunFile(std::wstring path, FileType type, int line_num = NULL, 
         if (start == L"https" || extension == L".url") {
             return ShellExecuteW(NULL, L"open", path.c_str(), NULL, NULL, SW_SHOWNORMAL);
         }
-        if (python == nullptr) {
-            //std::wcout << L"с питоном то проблемки...\n"; Sleep(50000);
-            return (HINSTANCE)1;
-        }
+        
         /*if (!code_from_scr_make.empty()) {
             std::wcout << L"не пусто1"; Sleep(5000);
         }
         else {
             std::wcout << L"пусто1"; Sleep(5000);
         }*/
-        if ((path.ends_with(L".py")) or (!code_from_scr_make.empty())) {
-            if (python != nullptr) {
-                wchar_t app_path[MAX_PATH];
-                GetModuleFileNameW(NULL, app_path, MAX_PATH);
-                std::wstring app_dir = app_path;
-                app_dir = app_dir.substr(0, app_dir.find_last_of(L"\\/"));
-
-                wchar_t old_dir[MAX_PATH];
-                GetCurrentDirectoryW(MAX_PATH, old_dir);
-                SetCurrentDirectoryW(app_dir.c_str());
-
-                // Выполняем скрипт
-                if (code_from_scr_make != "") {
-                    std::wcout << L"Запускаем... \n";
-                    python->execute_safe(code_from_scr_make);
-                    log(L"\033[32mСкрипт успешно запущен!\033[0m'\n");
-                    SetCurrentDirectoryW(old_dir);
-                    return (HINSTANCE)1;
-                }              
-                std::wstring wcode = get<std::wstring>(readFile({ .file_path = WstringTo_Utf8(path),.for_py_code = true, .isVector = false, }));
-                std::string code = WstringTo_Utf8(wcode);
-                std::wcout << L"Запускаем... " << path << std::endl;
-                python->execute_safe(code);
-                log(L"\033[32mСкрипт успешно запущен!\033[0m'\n");
-                SetCurrentDirectoryW(old_dir);
-                return (HINSTANCE)1;
-            }
-        }
+        
 
     }
     
@@ -274,11 +263,11 @@ static HINSTANCE RunFile(std::wstring path, FileType type, int line_num = NULL, 
         if (mode == L"1") {
             foundPath = search(path);
         }
-        else if (mode == L"2") {//ПОИТОГУ ЭТО НЕ РАБОТАЕТ СО СКРИПТАМИ
-            std::wcout << L"Такого файла нету, согласно настройкам выберите(или введите) сами: " << std::endl;
-            manager(1, type, pr_view, true, line_num, python); //возвращаемся для добавления в нужный файл
-            return (HINSTANCE)1;
-        }
+        //else if (mode == L"2") {//ПОИТОГУ ЭТО НЕ РАБОТАЕТ СО СКРИПТАМИ и так-же с новой функций startfiles которая без line_num
+        //    std::wcout << L"Такого файла нету, согласно настройкам выберите(или введите) сами: " << std::endl;
+        //    manager(1, type, pr_view, true, line_num, python); //возвращаемся для добавления в нужный файл
+        //    return (HINSTANCE)1;
+        //}
     }
 
     if (path.length() >= 4 && path.substr(path.length() - 4) == L".exe") {
@@ -340,111 +329,148 @@ static bool RunScheduledTask() {
     }
 }
 //логика запуска с флагами
-static int start_with_flags(std::wstring path, int line_number, std::wstring& fl, FileType type,bool from_admin) {
-    //парсим флаги, в вектор
-    //пониая какой какой(они могут быть в любом порядке) запускаем в правильном порядке например: 1флаг-closeafter 2-asadmin естественно сначало должен выполниться asadmin иначе
-    //всё сломается
+static int start_with_flags(std::wstring path,std::wstring raw_line, std::wstring& fl, FileType type, bool from_admin) {
     std::vector flags = split(fl, L':');
     sort_flags(flags);
-    log(L"вошли в start_with_flags\n");
-    log(L"путь:" + path + L"\nline_num:"+std::to_wstring(line_number) + (from_admin ? L"\nкак админ" : L"\nне как админ"));
-    log(L"флаги:\n");
-    for (std::wstring i : flags) {
-        log(i+L"\n");
+
+    bool hasAsadmin = false;
+    bool hasCloseAfter = false;
+    bool hasSeparate = false;
+
+    for (const auto& flag : flags) {
+        if (flag == Flags::Asadmin) hasAsadmin = true;
+        if (flag == Flags::CloseAfter) hasCloseAfter = true;
+        if (flag == Flags::Separate) hasSeparate = true;
     }
-    std::vector<std::wstring> asadminParams = {};
-    asadminParams.push_back(std::to_wstring((int)type));
-    asadminParams.push_back(std::to_wstring(line_number));
-    bool has_started_path = false;
-    for (std::wstring flag : flags) {
-        if (flag == Flags::Asadmin) {
-            from_admin ? log(L"from_admin\n") : log(L"not from_admin\n");
-            if (from_admin) { RunFile(path, type, line_number, nullptr, ""); has_started_path = true; continue; }
-            log(L"запуск с Asadmin\n");
+
+    // ===== ЛОГИКА ЗАПУСКА =====
+    bool program_started = false;
+
+    // 1. Обработка Asadmin
+    if (hasAsadmin) {
+        if (from_admin) {
+            // Уже с админскими правами — запускаем программу
+            if (hasSeparate) LaunchSeparate(path);
+            else RunFile(path, type, "");
+            program_started = true;
+        }
+        else {
+            // Нет прав — создаем задачу и выходим (без запуска!)
+            log(L"Создаем задачу для запуска от администратора\n");
+            std::vector<std::wstring> asadminParams = {
+                std::to_wstring((int)type),
+                raw_line
+            };
             if (remove((FILE_NAMES.at(FileType::Asadmintmp).c_str())) == 0) { ; }
-            else { log(L"Ошибка при удалении asadmintmp перед запуском"); } 
-            writefile(asadminParams, FILE_NAMES.at(FileType::Asadmintmp), "", false); //создаём и записываем новый
-            RunScheduledTask(); //запускаем задачу
-        }
-        if (flag == Flags::CloseAfter) {
-            log(L"запуск с CloseAfter\n");
-            if (has_started_path == false) { RunFile(path, type, line_number, nullptr, ""); std::exit(0); }
-            std::exit(0);
-        }
-    }
-    return 0;
-}
+            else { log(L"Ошибка при удалении asadmintmp перед запуском"); }
+            writefile(asadminParams, FILE_NAMES.at(FileType::Asadmintmp), "", false);
+            RunScheduledTask();
 
-
-static int groupStart(int group_num) {
-    std::wstring gr_line = choose_line(group_num, FileType::Group, true);
-    Group group = group_parser(gr_line);
-    std::vector<std::wstring> paths, flags = {};
-    bool indeed_closeAfter = false;
-    group.entries = sort_entries(group.entries);
-    for (const LineEntry& entry : group.entries) {
-        paths.push_back(entry.path);
-        if (indeed_closeAfter != true) {
-            if (entry.flags.find(L"CloseAfter") != std::wstring::npos) {
-                indeed_closeAfter = true;
+            // Выходим из текущего процесса — программа запустится позже от админа
+            if (hasCloseAfter) {
+                // Если есть CloseAfter, но программа еще не запущена — просто выходим
+                std::exit(0);
             }
+            return 0;
         }
-        flags.push_back(entry.flags);
     }
-    std::wstring line_flags = L"";
-    if (std::filesystem::exists("Grouptmp.txt")) { remove("Grouptmp.txt"); }
-    else { std::wcerr << L"Ошибка при удалении Grouptmp.txt возможно его не существует"; }
-    for (int i = 0; i < paths.size(); ++i) {
-        //временно
-        line_flags = flags[i];
-        if (!flags[i].empty()) {
-            if (indeed_closeAfter == true) { line_flags = del_close_after(flags[i]); }//удаление close_after, если вообще был
-            writefile(paths[i] + L"\"" + L"\"" + line_flags, FILE_NAMES.at(FileType::Grouptmp), "", false);
-            continue;
-            //startfiles(FileType::Grouptmp);
-        }
-        writefile(paths[i], FILE_NAMES.at(FileType::Grouptmp), "", false);
+
+    // 2. Обработка CloseAfter (если программа еще не запущена)
+    if (hasCloseAfter && !program_started) {
+        if (hasSeparate) LaunchSeparate(path);
+        else RunFile(path, type, "");
+        program_started = true;
+        std::exit(0); // Закрываем программу после запуска
     }
-    return 0;
 
-}
-
-int startfiles(FileType type, int line_number = NULL, PythonRuntime* python = nullptr, std::string codem = "", bool from_admin=false) {
-    
-    if (type == FileType::Grouptmp and line_number == 0) {
-        for (int i = 0; i < std::get<std::vector<std::wstring>>(readFile({ .file_path = getFileName(FileType::Grouptmp), .for_full_read = true, .isVector = true })).size();i++) {
-            log(L"запускаем "+ std::to_wstring(i+1) + L"линию из Grouptmp...\n");
-            startfiles(FileType::Grouptmp, i + 1,python,"",from_admin);
-            Sleep(1000);
-        }
+    if (hasSeparate and !program_started) {
+        LaunchSeparate(path);
+        program_started = true;
         return 0;
     }
 
+    // 3. Если нет флагов — просто запускаем
+    if (!program_started) {
+        RunFile(path, type, "");
+    }
+
+    return 0;
+}
+
+
+//static int groupStart(std::wstring& raw_line) {
+//
+//    Group group = group_parser(raw_line);
+//    std::vector<std::wstring> paths, flags = {};
+//    bool indeed_closeAfter = false;
+//    group.entries = sort_entries(group.entries);
+//    for (const LineEntry& entry : group.entries) {
+//        paths.push_back(entry.path);
+//        if (indeed_closeAfter != true) {
+//            if (entry.flags.find(L"CloseAfter") != std::wstring::npos) {
+//                indeed_closeAfter = true;
+//            }
+//        }
+//        flags.push_back(entry.flags);
+//    }
+//    std::wstring line_flags = L"";
+//    if (std::filesystem::exists("Grouptmp.txt")) { remove("Grouptmp.txt"); }
+//    else { std::wcerr << L"Ошибка при удалении Grouptmp.txt возможно его не существует"; }
+//    for (int i = 0; i < paths.size(); ++i) {
+//        //временно
+//        line_flags = flags[i];
+//        if (!flags[i].empty()) {
+//            if (indeed_closeAfter == true) { line_flags = del_close_after(flags[i]); }//удаление close_after, если вообще был
+//            writefile(paths[i] + L"\"" + L"\"" + line_flags, FILE_NAMES.at(FileType::Grouptmp), "", false);
+//            continue;
+//            //startfiles(FileType::Grouptmp);
+//        }
+//        writefile(paths[i], FILE_NAMES.at(FileType::Grouptmp), "", false);
+//    }
+//    return 0;
+//
+//}
+
+
+//весь код здесь-набор if-else привет yandere-dev
+int startfilesN(FileType type, const LineEntry& line_entry,
+    const std::string& codem, bool from_admin) {
+    if (line_entry.id == -1) {
+        return -1;
+    }
     log(L"Начало запуска...(вход в startfiles)\n");
+    if (type == FileType::Group) {
+        Group group = group_parser(line_entry.path); //переделать по экономнее, можно использовать global...
+        for (size_t i = 0; i < group.types.size();++i) {
+            
+            const LineEntry* entry = get_entry_by_id(group.types[i], group.IDs[i]);
+            if(entry != nullptr) startfilesN(FileType::null, *entry, codem, from_admin);
+            
+        }
+        return 0;
+    }
+    if (type == FileType::Script) {
+        tokinizer(WstringTo_Utf8(line_entry.path));
+        return 0;
+    }
     //log(from_admin);
     if (codem != "") {
         //std::wcout << codem; Sleep(5000);
-        RunFile(L"", FileType::null, NULL, python, codem);
+        RunFile(L"", FileType::null, codem);
         return 0;
     }
-    LineEntry line_entry = line_parser(type, line_number, L"");
     std::wstring path = line_entry.path;
     std::wstring flags = line_entry.flags;
-    log(L"путь:" + path+L"\nфлаги:"+flags);
+    std::wstring raw_line = line_entry.path + L"\"" + line_entry.name + L"\"" + line_entry.flags + L"*" + std::to_wstring(line_entry.id);
+    log(L"путь:" + path + L"\nфлаги:" + flags);
     if (path.empty()) {
         std::wcout << L"Путь не найден!\n";
         return 1;
     }
-    std::wstring exe_name = extract_filename(line_entry.path);
+    std::wstring exe_name; exe_name = extract_filename(line_entry.path);
     if (!flags.empty() and type != FileType::Group) {
         log(L"есть флаги:" + flags + L"\nидем запускать");
-        start_with_flags(path, line_number, flags, type,from_admin);
-        return 0;
-    }
-
-    if (type == FileType::Group) {
-        groupStart(line_number);
-        startfiles(FileType::Grouptmp);
+        start_with_flags(path,raw_line, flags, type, from_admin);
         return 0;
     }
 
@@ -453,21 +479,40 @@ int startfiles(FileType type, int line_number = NULL, PythonRuntime* python = nu
         std::wcout << L"Файл не найден!\n";
         return 1;
     }*/
-    HINSTANCE result = RunFile(path, type, line_number,python);
+    HINSTANCE result = RunFile(path, type);
     if (reinterpret_cast<INT_PTR>(result) == 1) { return 0; }
     if (reinterpret_cast<INT_PTR>(result) <= 32) {
-        colorfulPrint(L"Файл не запущен, ошибка:"+ shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))), PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::RED);
+        colorfulPrint(L"Файл не запущен, ошибка:" + shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))), PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::RED);
         log(L"Файл не запущен, ошибка: " + shell_error_control(static_cast<int>(reinterpret_cast<INT_PTR>(result))) + L"\n");
         return 1;
     }
     if (reinterpret_cast<INT_PTR>(result) == 33) {
         log(L"Файл уже запущен.\n");
         colorfulPrint(L"Файл уже запущен", PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::BLUE);
+        Sleep(1000);
         return 0;
     }
 
     colorfulPrint(L"Файл успешно запущен", PRINT_TEXTCOLOR::GREEN);
     log(L"Файл успешно запущен!");
     return 0;
+
+
+}
+
+
+
+
+
+
+
+
+int startfiles(FileType type, int line_number = NULL, std::string codem = "", bool from_admin=false) {
+    
+
+    LineEntry line_entry = line_parser(type, line_number, L"");
+
+    // Вызываем новую версию с полученной структурой
+    return startfilesN(type, line_entry, codem, from_admin);
 }
 

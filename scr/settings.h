@@ -3,6 +3,8 @@
 #include <map>
 #include <vector>
 
+#include "advanced_choice.h"
+
 std::wstring prog_settings(bool change, short num_to_read);
 extern const std::map<std::wstring, std::wstring> PATH_CHOOSE_VIEW;
 extern const std::map<std::wstring, std::wstring> IF_PATH_WRONG;
@@ -17,6 +19,8 @@ struct ProgSettings {
 
     std::wstring showlines;
     std::wstring showlines_num;
+
+    menucolors MenuColors;
 };
 
 extern ProgSettings CURRENT_SETTINGS;

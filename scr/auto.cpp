@@ -16,6 +16,7 @@
 #include <sstream>
 #include <filesystem>
 #include <stdexcept>
+
 #include "app_config.h"
 #include "Groups.h"
 #include "StartFuncs.h"
@@ -31,6 +32,8 @@
 #include "logger.h"
 #include "converter.h"
 #include "Files_checker.h"
+#include "ui_maker.h"
+#include "fq-start.h"
 
 static constexpr auto EXIT_CODE = -1;
 using namespace std;
@@ -67,14 +70,8 @@ void EnableANSI() {
 
 static void create_group_shortcut() {
     //std::wcout << get<std::wstring>(readFile("group", false));
-    vector<wstring> lines = get<vector<wstring>>(readFile({ .file_path = FILE_NAMES.at(FileType::Group), .isVector = true }));
-    if (lines.empty() || (lines.size() == 1 && lines[0].empty())) {
-        colorfulPrint(L"\nУ тебя нету групп", PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::RED);
-        countdown(4, L"Осталось для возвращения ", 1);
-        return;
-    }
     int group_number = advansed_chooser({ 
-        .lines_to_choose = lines,
+        .lines_to_choose = show_groups(CURRENT_SETTINGS.showlines_num),
         .singleChoice = true, 
         .title = L"Выберите группу для создания ярлыка:\n" })[0];
     if (group_number == EXIT_CODE) return;
@@ -91,7 +88,7 @@ static void create_group_shortcut() {
     if (shortcut_folder.empty()) {
         shortcut_folder = GetProgramsMenuPath();
     }
-
+    int group_id = global_all_lines[FileType::Group][group_number - 1].id;
     std::wstring shortcut_path = shortcut_folder + L"\\Group_" +
         std::to_wstring(group_number) +
         L"_" + hotkey_letter +
@@ -104,7 +101,7 @@ static void create_group_shortcut() {
 
 
 
-static void add_or_delete(int app_type, PythonRuntime& python, wstring prog_view = L"") {
+static void add_or_delete(int app_type, wstring prog_view = L"") {
     auto it = FILE_TYPES.find(app_type);
     if (app_type == 7) //программные настройки
     {
@@ -123,12 +120,12 @@ static void add_or_delete(int app_type, PythonRuntime& python, wstring prog_view
     //}
     bool is_group_or_link = app_type == 3 or app_type == 5;
     bool is_group = app_type == 5;
-    vector<wstring> lineees; 
-    if (is_group) lineees = show_groups(CURRENT_SETTINGS.showlines_num);
-    else { lineees = showfile(it->second.second, CURRENT_SETTINGS.showlines_num); }
+    vector<wstring> lines_to_show; 
+    if (is_group) lines_to_show = show_groups(CURRENT_SETTINGS.showlines_num);
+    else { lines_to_show = showfile(it->second.second, CURRENT_SETTINGS.showlines_num); }
 
     wstring title;
-    for (auto& line : lineees) {
+    for (auto& line : lines_to_show) {
         title += line + L"\n";
     }
     vector<wstring> lines_to_ch = { L"Добавить" };
@@ -145,7 +142,7 @@ static void add_or_delete(int app_type, PythonRuntime& python, wstring prog_view
     }
     if (action > 2 and !is_group_or_link and with_flag == false) { action -= 1; }
     if (it != FILE_TYPES.end()) {
-        manager(action, it->second.second, prog_view, false, NULL, &python);
+        manager(action, it->second.second, prog_view, false);
         if (action == 1) { countdown(0.5, L"Осталось до возвращения: ", 1); }
         if (action == 2) { countdown(3, L"Осталось до возвращения: ", 1); }
         if (it->second.second == FileType::Script) { make_txt_for_scripts("scripts\\"); } //скрипты изначально-файлы, уже потом-запись в файл с путями
@@ -154,7 +151,7 @@ static void add_or_delete(int app_type, PythonRuntime& python, wstring prog_view
 }
 
 
-static void settings(wstring pr_view, PythonRuntime& python) {
+static void settings(wstring pr_view) {
     //std::wstring category = input_word(L"Выбор категории:\n1-Игры, 2-Программы, 3-Ссылки, 4-скрипты \033[31m5-Группы\033[0m 6-ярлык 7-настройки работы");
     while (true) {
         int category = advansed_chooser({
@@ -162,13 +159,13 @@ static void settings(wstring pr_view, PythonRuntime& python) {
             .singleChoice = true,
             .title = L"Выбор категории:\n" })[0];
         if (category == EXIT_CODE) { break; }
-        add_or_delete(category, python, CURRENT_SETTINGS.path_view_num);
+        add_or_delete(category, CURRENT_SETTINGS.path_view_num);
     }
     
 }
 
 
-static void run_application(short app_type, PythonRuntime& python) {
+static void run_application(short app_type) {
     if (auto it = FILE_TYPES.find(app_type); it != FILE_TYPES.end()) { // 1 из фич с++ 17 - обявление переменной в if зачем? я хз, но тут объявляем переменную содерж. словарь в которому мы выбираем элементы
         bool is_group_or_link = app_type == 3 or app_type == 5;
         bool is_group = app_type == 5;
@@ -181,43 +178,148 @@ static void run_application(short app_type, PythonRuntime& python) {
         else names = showfile(it->second.second, CURRENT_SETTINGS.showlines_num);
 
 
-        std::wstring additional_option = L"";
-        additional_option = L"Выбрать файл на компьютере";
-        if (is_group) { additional_option = L"Создать новую"; }
-        else if (is_link) { additional_option = L"Написать новую"; }
-        else if (is_script) additional_option = L"Создать новый";
-        int option = 1;
-
-        auto orig_lines_count = names.size();
-        names.push_back(L" ");
-        names.push_back(additional_option);
-        if (is_script) {
-            names.push_back(L"Посмотреть");
-        }
-        
+        int preexpanded = 0;
+        int prehovered = 0;
+        bool need_rechoice = false;
         while (true) {
+            if (need_rechoice) { //значит основа обновилась, возможно-пересобираем
+                if (is_group) names = show_groups(CURRENT_SETTINGS.showlines_num);
+                else names = showfile(it->second.second, CURRENT_SETTINGS.showlines_num);
+            }
             //second.second -- во втором(элементе-словаре) второй элемент
-            int line_number = advansed_chooser({
+            //здесь придётся для всех линий найти детей и для всех показать с детьми
+            /* как ожидает advansed_chooserC:
+            options.children = { {2,{L"излишне длинная ",L"лол это \nлол",L"kkkkkkkkkk"}},
+                         {6,{L"----"}}
+            };
+            */
+            
+            //for()
+            std::map<int, std::vector<std::wstring>> children = prepare_children(it->second.second, CURRENT_SETTINGS.showlines_num);
+            
+            //для дочерних-отсортированные
+            //names[0] = PRINT_TEXTCOLOR::RED + names[0] + PRINT_TEXTCOLOR::RESET; РАБОТАЕТ. ЦВЕТ ДЛЯ ЛЮБОГО текста
+            ChoiceResult choice_result = advansed_chooserC({
                 .lines_to_choose = names,
                 .singleChoice = true,
-                .title = L"Выберите " + it->second.first + L"\n" })[0];
-            if (line_number == orig_lines_count + 1) { continue; }//предпоследний выбор-пустой выбор
-            if (line_number == orig_lines_count + 2) {
-                additional_option_logic(it, option, orig_lines_count, python, app_type);
-                return;
+                .title = L"F1 - изменить основной подсвеченный сейчас элемент\n" 
+                          "F2 - изменить дочерние элементы подсвеченного элемента\n"
+                          "F3 - добавить элемент\n"
+                          "F4 - режим удаления",
+                .children = children,
+                .childrenMultiplyChoice = true,
+                .prehovered = prehovered,
+                .preexpanded = preexpanded,
+                .menucolors = CURRENT_SETTINGS.MenuColors
+                });
+
+            bool change_children = false;
+            bool change_and_back = false;
+            bool key_pressed = false;
+            need_rechoice = false;
+            if((int)choice_result.key > 0 and (int)choice_result.key < 5) key_pressed = true;
+
+            switch (choice_result.key) {
+            case ShortcutKeys::F1:
+                if (is_group or is_script) {//группа или скрипт
+                    colorfulPrint(L"ПОКА НЕ ПОДДЕРЖИВАЮТСЯ", PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::RED); //сейчас питон скриптов - просто нет, а группы совсем другие
+                    Sleep(3000);
+                    key_pressed = true;
+                    need_rechoice = true;
+                    break;
+                }
+                change_lines(it->second.second, global_all_lines[it->second.second][choice_result.hovered].id);
+                key_pressed = true;
+                need_rechoice = true;
+                break;
+            case ShortcutKeys::F2:
+                change_and_back = true;
+                key_pressed = true;
+                break;
+            case ShortcutKeys::F3:
+                need_rechoice = true;
+                key_pressed = true;
+                manager(1, it->second.second, CURRENT_SETTINGS.path_view_num, false);
+                break;
+            case ShortcutKeys::F4:
+                need_rechoice = true;
+                key_pressed = true;
+                manager(2, it->second.second, CURRENT_SETTINGS.path_view_num, false);
             }
-            if (line_number == orig_lines_count + 3 and is_script) {
-                option = 2;
-                additional_option_logic(it, option, orig_lines_count, python, app_type);
-                return;
+
+            if (need_rechoice) {
+                prehovered = choice_result.hovered;
+                //надо проверить на наличие дочерних, но как...
+                if (children.contains(choice_result.hovered) and !children[choice_result.hovered].empty()) {
+                    preexpanded = choice_result.hovered;
+                }
+                continue;
             }
-            if (line_number == EXIT_CODE) return;
-            startfiles(it->second.second, line_number, &python, "", false);
+
+            int line_number = choice_result.hovered+1; //line_num is always 1-based hover
+            if (!key_pressed) {
+                line_number = choice_result.roots[0];
+                if (line_number == EXIT_CODE) return;
+            }
+           
+            FlagsContents old_fl_content = flags_parser(line_parser(it->second.second, line_number, L"").flags);
+
+            std::map<FileType, std::vector<int>> children_flag = old_fl_content.Children;//узнаём какие дети были доступны для выбранной линии
+            
+
+            
+            
+
+            
+            if (change_and_back) {
+                
+                LineEntry new_line;
+                new_line.flags = choose_and_make_flags(global_all_lines[it->second.second][choice_result.hovered].flags, true);
+                FileType root_type = it->second.second;
+                replace_entity({
+                    .type = root_type,
+                    .old_line = global_all_lines[root_type][choice_result.hovered],
+                    .new_line_entry = new_line,
+                    .full = false,
+                    .flags = true
+                    });
+                
+            }
+            if (change_and_back) {
+                
+                preexpanded = choice_result.hovered;//hover-0based
+                prehovered = choice_result.hovered;
+                continue;
+            }
+            //запуск дочерних
+            struct ChildInfo { FileType type; int id; };
+            std::vector<ChildInfo> all_children;
+            for (const auto& [type, ids] : children_flag) {
+                for (int id : ids) {
+                    all_children.push_back({ type, id });
+                }
+            }
+            size_t full_size = 0;
+            for (int ch1_based : choice_result.children) {
+                if (ch1_based < 1 || ch1_based > all_children.size()) continue;
+
+                const auto& child = all_children[ch1_based - 1];
+                auto entry = get_entry_by_id(child.type, child.id);
+                if (entry != nullptr) {
+                    startfilesN(child.type, *entry, "", false);
+                }
+                //std::cout << "type: " << child.type << ", id: " << child.id << std::endl;
+            }
+            
+
+
+            startfiles(it->second.second, line_number, "", false);
             return;
         }
     }
     else { wcerr << L"\033[31mНеверный тип приложения!\033[0m\n"; }
 }
+
 
 int main(int argc, char* argv[]) {
     // Настройка консоли
@@ -228,17 +330,64 @@ int main(int argc, char* argv[]) {
     SetConsoleOutputCP(CP_UTF8);
     _setmode(_fileno(stdout), _O_U16TEXT);
     _setmode(_fileno(stdin), _O_U16TEXT);
-    start_new_log();
-    log(L"привет");
-    if (!std::filesystem::exists("python_embed") ||
-        !std::filesystem::exists("python_embed/python310.zip")) {
-        log(L"ОШИБКА: Папка python_embed или python310.zip не найдены!\n");
-        //log(L"Разместите папку python_embed рядом с exe-файлом.\n");
-        system("pause");
-        return 1;
-    }
+    
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE); // Получаем дескриптор вывода
 
-    PythonRuntime python;
+    CONSOLE_FONT_INFOEX fontInfo;
+    fontInfo.cbSize = sizeof(CONSOLE_FONT_INFOEX); // Обязательное поле для WinAPI
+
+    // Заполняем структуру текущими настройками, чтобы не сбросить лишнее
+    GetCurrentConsoleFontEx(hConsole, FALSE, &fontInfo);
+
+    // Меняем параметры шрифта
+    fontInfo.dwFontSize.X = 8;   // Автоматическая ширина
+    fontInfo.dwFontSize.Y = 16;  // Высота шрифта в пикселях (крупный размер лучше для эмодзи)
+    fontInfo.FontFamily = FF_DONTCARE;
+    fontInfo.FontWeight = FW_NORMAL; // Обычная жирность
+
+    // Копируем имя шрифта. Рекомендуется "Cascadia Code" или "Consolas"
+    wcscpy_s(fontInfo.FaceName, L"DejaVu Sans Mono");
+
+    // Применяем изменения
+    SetCurrentConsoleFontEx(hConsole, FALSE, &fontInfo);
+
+
+
+
+
+
+
+
+
+    start_new_log();
+    load_all_files(); //загружаем в память содержимое ВООБЩЕ ВСЕХ файлов с линиями
+
+    
+    //tokinizer("test.fq");
+    /*maker();
+    system("pause");*/
+    //в долгий ящик
+    //auto as =  std::get<std::wstring> (readFile({ .file_path = "temp.fq",.for_full_read = true,.for_py_code = true,.isVector = false }));
+    //std::wstring line = L"";
+    //for (size_t i = 0; i < as.size();++i) {
+    //    if (as[i] == L' ' or as[i] == L'\t') {
+    //        continue;
+    //    }
+    //    //убрать коменты
+    //    else if (as[i] == L'#') {
+    //        for (size_t t = i; t < as.size(); ++t) {
+    //            if (as[t] == L'\n') {
+    //                i = t;
+    //                break;
+    //            }
+    //        }
+    //    }
+    //    else { line.push_back(as[i]); }
+    //}
+    //std::wcout << line;
+    //system("pause");
+
+
     //Sleep(100000);
     //test
     //startfiles(NULL, "", &python, WstringTo_Utf8(get<std::wstring>(readFile("1test.txt", false, true))));
@@ -247,9 +396,9 @@ int main(int argc, char* argv[]) {
         if (argc > 1 and argc != 4) {
             std::string command = argv[1];
             if (command == "--run-group" && argc > 2) {
-                int group_number = std::stoi(argv[2]);
-                log(L"Запуск группы:" + to_wstring(group_number) + L" по ярлыку");
-                startfiles(FileType::Group, group_number, &python, "",false);
+                int group_id = std::stoi(argv[2]);
+                log(L"Запуск группы:" + to_wstring(group_id) + L" по ярлыку");
+                startfilesN(FileType::Group, *get_entry_by_id(FileType::Group, group_id), "",false);
                 return 0;
             }
         }
@@ -258,10 +407,14 @@ int main(int argc, char* argv[]) {
             if (wcscmp(argv[1], L"--Asadmin") == 0) {
                 log(L"Запуск чего-то от администратора\n");
                 std::vector<std::wstring> Asadmintmp = std::get<std::vector<wstring>>(readFile({ .file_path = getFileName(FileType::Asadmintmp),.isVector = true }));
-                int line_num = stoi(Asadmintmp[1]); // там ДОЛЖНО гарантироваться, что 1-значение-тип именно в контексте FileType, а не map из main, 2-номер линии
+                
+                //Asadmintmp[1] ТЕПЕРЬ ЧИСТАЯ ЛИНИЯ там ДОЛЖНО гарантироваться, что 1-значение-тип именно в контексте FileType, а не map из main, 2-сама линия
+
+                
                 FileType type = FileType(stoi(Asadmintmp[0]));
-                log(L"номер линии:"+ Asadmintmp[1] +L"\nтип:"+ Asadmintmp[0]);
-                startfiles(type, line_num, &python, "",true);
+                LineEntry line_entry = line_parser(type, 0, Asadmintmp[1]);
+                log(L"линия:"+ Asadmintmp[1] +L"\nтип:"+ Asadmintmp[0]);
+                startfilesN(type, line_entry, "",true);
                 if (remove((FILE_NAMES.at(FileType::Asadmintmp).c_str())) == 0) { ; }
                 else {log(L"Ошибка при удалении asadmintmp после запуска");}
                 return 0;
@@ -279,9 +432,10 @@ int main(int argc, char* argv[]) {
 
 
     // Меню действий
-
+    menucolors MenuColors;
     //Основной цикл
     while (true) {
+        MenuColors = CURRENT_SETTINGS.MenuColors;
         std::vector<wstring> lines = {
                 L"Запустить игру",
                 L"Запустить программу",
@@ -289,18 +443,21 @@ int main(int argc, char* argv[]) {
                 L"Запустить вашы cкрипты",
                 L"Запуск \033[31mгруппы\033[0m",
                 L"Настройки" };
-        int choice = advansed_chooser({
+        int choice = advansed_chooserC({
             .lines_to_choose = lines,
             .singleChoice = true,
-            .title = L"Ваш вид выбора пути: " + CURRENT_SETTINGS.path_choose_view + L"\nВаши авто-действия если путь неверный: " + CURRENT_SETTINGS.if_path_wrong + L"\nВыберите действие\n" })[0];
+            .title = L"Ваш вид выбора пути: " + PRINT_TEXTCOLOR::RED + CURRENT_SETTINGS.path_choose_view + PRINT_TEXTCOLOR::RESET + L"\nВаши авто-действия если путь неверный: " + CURRENT_SETTINGS.if_path_wrong + L"\nВыберите действие\n",
+            .menucolors = MenuColors
+            }).roots[0];
+        
         if (choice == EXIT_CODE) { break; }
         switch (choice) {
-        case 1: run_application(1, python); countdown(2, L"Осталось до возвращения: ", 1); break;
-        case 2: run_application(2, python); countdown(2, L"Осталось до возвращения: ", 1); break;
-        case 3: run_application(3, python); countdown(2, L"Осталось до возвращения: ", 1); break;
-        case 4: run_application(4, python); countdown(2, L"Осталось до возвращения: ", 1); break;
-        case 5: run_application(5, python); break;
-        case 6: settings(CURRENT_SETTINGS.path_view_num,python); break;
+        case 1: run_application(1); countdown(2, L"Осталось до возвращения: ", 1); break;
+        case 2: run_application(2); countdown(2, L"Осталось до возвращения: ", 1); break;
+        case 3: run_application(3); countdown(2, L"Осталось до возвращения: ", 1); break;
+        case 4: run_application(4); countdown(2, L"Осталось до возвращения: ", 1); break;
+        case 5: run_application(5); break;
+        case 6: settings(CURRENT_SETTINGS.path_view_num); break;
         default: wcerr << L"Неверный выбор!\n"; break;
         }
     }
@@ -312,21 +469,8 @@ int main(int argc, char* argv[]) {
         std::wcerr << L"Exception details: " << e.what() << std::endl;
         #endif
     }
-    catch (const std::string& e) {
-        std::wcerr << L"Строковая ошибка: " << e.c_str() << std::endl;
-    }
-    catch (const char* e) {
-        std::wcerr << L"Ошибка C-строки: " << e << std::endl;
-    }
-    catch (...) {
-        std::wcerr << L"Неизвестная критическая ошибка!" << std::endl;
-        #ifdef _WIN32
-        DWORD error = GetLastError();
-        if (error != 0) {
-            std::wcerr << L"Код ошибки Windows: " << error << std::endl;
-        }
-        #endif
-    }
+    
+    
     return 0;
 }
 

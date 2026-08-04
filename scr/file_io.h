@@ -1,5 +1,5 @@
 #pragma once
-#include <variant>;
+#include <variant>
 #include "app_config.h"
 
 int writefile(std::wstring line, std::string file_path, std::string prog_name = "", bool show = true);
@@ -13,6 +13,6 @@ struct ReadOptions {
 };
 std::variant<std::wstring, std::vector<std::wstring>> readFile(ReadOptions options);
 void make_txt_for_scripts(std::string directory_path);
-std::wstring choose_line(short line_number, FileType type, bool raw = false);
+void save_file(FileType type);
+void mass_files_delete(std::vector<int> human_nums, FileType type);
 int delete_lines_or_insert_or_add_one(FileType type, std::vector<int> numbers, bool insert, std::wstring line_to_insert, short line_number, bool show, bool add);
-void mass_files_delete(std::vector<int> num_of_indxes, FileType type);

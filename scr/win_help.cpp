@@ -8,6 +8,8 @@
 #include "file_io.h"
 #include "win_help.h"
 #include "logger.h"
+#include "settings.h"
+#include "ui_interactions.h"
 
 
 
@@ -49,7 +51,8 @@ static void make_task_with_elevate() {
 }
 
 int makeTaskAdmin() {
-    if (choose_line(5, FileType::Settings) == L"1") { return -1; }
+
+    if (prog_settings(false,5) == L"1") { return -1; }
     std::wstring path = std::filesystem::current_path();
     path += L"\\auto.exe";
     std::wstring name = L"Asadmin_auto";
@@ -267,4 +270,140 @@ bool ActivateProcessByPID(DWORD pid) {
     else {
         return false;
     }
+}
+
+
+void win_click_on_pos(int x, int y,bool Right) {
+    SetCursorPos(x, y);
+
+    // Симулируем нажатие левой кнопки мыши
+    INPUT inputs[2] = {};
+
+    inputs[0].type = INPUT_MOUSE;
+    inputs[0].mi.dwFlags = Right ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
+
+    inputs[1].type = INPUT_MOUSE;
+    inputs[1].mi.dwFlags = Right ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP;
+
+    SendInput(2, inputs, sizeof(INPUT));
+}
+
+static WORD GetVkCode(std::wstring key) {
+    // Приводим к нижнему регистру для универсальности
+    std::transform(key.begin(), key.end(), key.begin(), ::towlower);
+
+    // Модификаторы и спецклавиши
+    if (key == L"ctrl" || key == L"control") return VK_CONTROL;
+    if (key == L"shift") return VK_SHIFT;
+    if (key == L"alt") return VK_MENU;
+    if (key == L"win" || key == L"windows") return VK_LWIN;
+    if (key == L"enter" || key == L"return") return VK_RETURN;
+    if (key == L"space") return VK_SPACE;
+    if (key == L"tab") return VK_TAB;
+    if (key == L"escape" || key == L"esc") return VK_ESCAPE;
+    if (key == L"backspace") return VK_BACK;
+    if (key == L"delete" || key == L"del") return VK_DELETE;
+
+    // Функциональные клавиши (F1 - F12)
+    if (key.length() > 1 && key[0] == L'f') {
+        try {
+            int fNum = std::stoi(key.substr(1));
+            if (fNum >= 1 && fNum <= 12) return VK_F1 + (fNum - 1);
+        }
+        catch (...) {}
+    }
+
+    // Одиночные буквы и цифры (берём ASCII код заглавной буквы)
+    if (key.length() == 1) {
+        return (WORD)::towupper(key[0]);
+    }
+
+    return 0; // Неизвестная клавиша
+}
+
+// Универсальная функция выполнения комбинации
+bool SendShortcut(const std::vector<std::wstring>& keys) {
+    if (keys.empty()) return false;
+
+    std::vector<WORD> vkCodes;
+    for (const auto& key : keys) {
+        WORD vk = GetVkCode(key);
+        if (vk != 0) {
+            vkCodes.push_back(vk);
+        }
+
+        else {
+            colorfulPrint(L"LОшибка: Неизвестная клавиша '" + key+L'\'', PRINT_TEXTCOLOR::BLACK, PRINT_BACKGROUNDCOLOR::RED);
+            return false;
+        }
+    }
+
+    // Всего событий будет в 2 раза больше, чем клавиш (нажатие + отпускание)
+    size_t totalEvents = vkCodes.size() * 2;
+    std::vector<INPUT> inputs(totalEvents);
+    ZeroMemory(inputs.data(), inputs.size() * sizeof(INPUT));
+
+    size_t index = 0;
+
+    // 1. Имитируем нажатие (KeyDown) всех клавиш по очереди
+    for (WORD vk : vkCodes) {
+        inputs[index].type = INPUT_KEYBOARD;
+        inputs[index].ki.wVk = vk;
+        index++;
+    }
+
+    // 2. Имитируем отпускание (KeyUp) в ОБРАТНОМ порядке
+    for (auto it = vkCodes.rbegin(); it != vkCodes.rend(); ++it) {
+        inputs[index].type = INPUT_KEYBOARD;
+        inputs[index].ki.wVk = *it;
+        inputs[index].ki.dwFlags = KEYEVENTF_KEYUP;
+        index++;
+    }
+
+    // Отправляем всю цепочку за один системный вызов
+    UINT sent = SendInput((UINT)inputs.size(), inputs.data(), sizeof(INPUT));
+    return sent == inputs.size();
+}
+
+
+bool SendText(const std::wstring& text) {
+    if (text.empty()) return false;
+
+    // Каждому символу нужно 2 события: нажатие и отпускание
+    size_t totalEvents = text.length() * 2;
+    std::vector<INPUT> inputs(totalEvents);
+    ZeroMemory(inputs.data(), inputs.size() * sizeof(INPUT));
+
+    size_t index = 0;
+
+    for (wchar_t ch : text) {
+        // 1. Нажатие символа (KeyDown)
+        inputs[index].type = INPUT_KEYBOARD;
+        inputs[index].ki.wVk = 0; // Для UNICODE физический код клавиши не нужен
+        inputs[index].ki.wScan = ch; // Передаем сам символ в ScanCode
+        inputs[index].ki.dwFlags = KEYEVENTF_UNICODE;
+        index++;
+
+        // 2. Отпускание символа (KeyUp)
+        inputs[index].type = INPUT_KEYBOARD;
+        inputs[index].ki.wVk = 0;
+        inputs[index].ki.wScan = ch;
+        inputs[index].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        index++;
+    }
+
+    // Отправляем весь текст в активное окно одним пакетом
+    UINT sent = SendInput((UINT)inputs.size(), inputs.data(), sizeof(INPUT));
+    return sent == inputs.size();
+}
+
+
+
+
+//возвращает такое:L"1000,900"
+std::wstring fq_maker::get_cursor_pos() {
+
+    POINT pt;
+    if (GetCursorPos(&pt)) return std::to_wstring(pt.x) + L',' + std::to_wstring(pt.y);
+    else return L"";
 }

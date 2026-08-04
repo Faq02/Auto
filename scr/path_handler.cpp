@@ -5,9 +5,10 @@
 #include "path_handler.h"
 #include "logger.h"
 #include "app_config.h"
+#include "ui_interactions.h"
 
-constexpr std::wstring Console_standart = L"1";
-constexpr std::wstring Win_path = L"2";
+constexpr std::wstring_view Console_standart = L"1";
+constexpr std::wstring_view Win_path = L"2";
 std::tuple<bool, std::wstring> Win_path_selector()
 {
     OPENFILENAME ofn;
@@ -53,7 +54,7 @@ std::wstring choose_file_on_pc(std::wstring& path_choose_view, FileType type, sh
             return L"";
         }
     }
-    if (path_choose_view == Console_standart) {
+    if (path_choose_view == Console_standart and type != FileType::Link) {
         std::wstring file_path;
         file_path = input_line(L"Введите путь: ");
         return file_path;
@@ -62,27 +63,11 @@ std::wstring choose_file_on_pc(std::wstring& path_choose_view, FileType type, sh
 }
 //скорей всего её отсюда надо убрать в ui_interactions
 //делитель - почти всё \n пробел и \t
-std::wstring input_word(const std::wstring& what_input)
-{
-    std::wcout << what_input << L'\n';
-    std::wstring choice;
-    //choice.reserve(4); -- было нужно для числовых значений, но есть использование как строки
-    std::wcin >> choice;
-    std::wcin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
-    return choice;
-}
-//делитель - новая строка
-std::wstring input_line(const std::wstring& prompt) {
-    std::wcout << prompt << L'\n';
-    std::wstring line;
-    std::getline(std::wcin, line);
-    return line;
-}
 
 static bool isNotSpace(wchar_t c) {
     return !std::isspace(static_cast<wint_t>(c));
 }
-
+//режит линию по пробелу на пути.линия должна содержать полные пути
 std::vector<std::wstring> split_lineOn_paths(std::wstring& line) {
     log(L"inter split_lineOn_paths\noriginal line: " + line + L"\nsplited:\n");
     std::vector<std::wstring> lines;
@@ -113,7 +98,7 @@ std::vector<std::wstring> split_lineOn_paths(std::wstring& line) {
     return lines;
 }
 
-std::wstring extract_filename(const std::wstring& path) {
+std::wstring_view extract_filename(std::wstring_view path) {
     const size_t last_slash = path.find_last_of(L"\\/");
-    return (last_slash == std::wstring::npos) ? path : path.substr(last_slash + 1);
-}   
+    return (last_slash == std::wstring_view::npos) ? path : path.substr(last_slash + 1);
+}
